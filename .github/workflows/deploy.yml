@@ -95,10 +95,9 @@ jobs:
         env:
           ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
         run: |
-          if [ -n "$ADMIN_EMAILS" ]; then
-            printf '\nADMIN_EMAILS=%s\n' "$(printf '%s' "$ADMIN_EMAILS" | tr -d '\n\r ')" >> functions/.env
-            echo "Admin list added."
-          fi
+          list="$(printf '%s' "$ADMIN_EMAILS" | tr -d '\n\r |')"
+          sed -i "s|^ADMIN_EMAILS=.*|ADMIN_EMAILS=${list:-none}|" functions/.env
+          if [ -n "$list" ]; then echo "Admin list added."; else echo "No admins set (ADMIN_EMAILS secret is empty)."; fi
 
       - name: Deploy (website, functions, rules)
         # Google's function builds sometimes fail with "An unexpected error occurred", especially on a

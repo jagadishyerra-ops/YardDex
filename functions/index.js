@@ -20,7 +20,7 @@ const DAILY_LIMIT = defineInt("DAILY_LIMIT", { default: 60 });
 // Photos the whole app can identify per day, across every family. Protects your Claude API bill.
 const GLOBAL_DAILY_LIMIT = defineInt("GLOBAL_DAILY_LIMIT", { default: 300 });
 // Who may open /admin: Google emails separated by commas. Set from the ADMIN_EMAILS GitHub secret at deploy time.
-const ADMIN_EMAILS = defineString("ADMIN_EMAILS", { default: "" });
+const ADMIN_EMAILS = defineString("ADMIN_EMAILS", { default: "none" });
 
 const envDefaults = () => ({
   model: CLAUDE_MODEL.value(),
@@ -323,7 +323,7 @@ const num = (snap, k) => (snap && snap.exists ? Number(snap.get(k)) || 0 : 0);
 exports.admin = onCall({ ...OPTS, timeoutSeconds: 120 }, async req => {
   const auth = requireUser(req);
   const { action } = req.data || {};
-  if (action === "whoami") return { admin: isAdmin(auth), configured: ADMIN_EMAILS.value().trim() !== "" };
+  if (action === "whoami") return { admin: isAdmin(auth), configured: !["", "none"].includes(ADMIN_EMAILS.value().trim().toLowerCase()) };
   if (!isAdmin(auth)) throw new HttpsError("permission-denied", "This account isn't an admin.");
 
   if (action === "overview") {
