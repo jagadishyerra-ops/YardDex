@@ -91,7 +91,16 @@ jobs:
           fi
 
       - name: Deploy (website, functions, rules)
-        run: firebase deploy --project "$PROJECT_ID" --non-interactive --force
+        # Google's function builds sometimes fail with "An unexpected error occurred", especially on a
+        # new project. Try up to three times before giving up.
+        run: |
+          for attempt in 1 2 3; do
+            firebase deploy --project "$PROJECT_ID" --non-interactive --force && exit 0
+            echo "::warning::Deploy attempt $attempt failed; retrying in 60 seconds."
+            sleep 60
+          done
+          echo "::error::Deploy failed 3 times. Open the Cloud Build link in the log above to see why."
+          exit 1
 
       - name: Let the app read photos back for lithophanes
         run: gcloud storage buckets update "gs://${PROJECT_ID}.firebasestorage.app" --cors-file=cors.json
