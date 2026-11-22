@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Family members are listed in config/family { members: ["email", ...] }.
+    // Edit that document in the Firebase console; the app can't change it.
+    function isFamily() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in
+           get(/databases/$(database)/documents/config/family).data.members;
+    }
+    match /config/{doc} { allow read: if isFamily(); allow write: if false; }
+    match /usage/{doc}  { allow read, write: if false; }   // written only by the Cloud Function
+    match /settings/{doc} { allow read, write: if isFamily(); }
+    match /finds/{doc} {
+      allow read, delete: if isFamily();
+      allow create, update: if isFamily()
+        && request.resource.data.name is string
+        && request.resource.data.createdAt is string
+        && request.resource.size() < 40;
+    }
+  }
+}
