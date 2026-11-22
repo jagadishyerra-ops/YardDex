@@ -1,0 +1,99 @@
+# Deploys YardDex to Firebase (https://yarddex-6150d.web.app) whenever code is pushed.
+# Needs two repository secrets (GitHub → Settings → Secrets and variables → Actions):
+#   FIREBASE_SERVICE_ACCOUNT  the JSON key of a Google Cloud service account allowed to deploy
+#   ANTHROPIC_API_KEY         your Claude API key; copied into Firebase Secret Manager when it changes
+name: Deploy to Firebase
+
+on:
+  push:
+    branches: [main, ccr-c9f34fea-l6o8js]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: yarddex-6150d
+  PROJECT_NUMBER: "146622436381"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check that the secrets are set
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          missing=0
+          [ -n "$SA" ]  || { echo "::error::Add the FIREBASE_SERVICE_ACCOUNT secret (Settings → Secrets and variables → Actions), then re-run this job."; missing=1; }
+          [ -n "$KEY" ] || { echo "::error::Add the ANTHROPIC_API_KEY secret (Settings → Secrets and variables → Actions), then re-run this job."; missing=1; }
+          exit $missing
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Install function dependencies
+        working-directory: functions
+        run: npm ci
+
+      - name: Run tests
+        working-directory: functions
+        run: npm test
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools@14
+
+      - name: Turn on the Google Cloud services Firebase needs
+        run: |
+          gcloud services enable --project "$PROJECT_ID" \
+            cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com \
+            artifactregistry.googleapis.com secretmanager.googleapis.com compute.googleapis.com \
+            firebaserules.googleapis.com firebasestorage.googleapis.com eventarc.googleapis.com
+
+      - name: Grant the permissions Firebase needs (safe to repeat)
+        run: |
+          grant() {
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$1" --role="$2" \
+              --condition=None --quiet >/dev/null \
+              && echo "ok: $2 for $1" \
+              || echo "::warning::Couldn't grant $2 to $1. If the deploy fails, re-run this job in a few minutes."
+          }
+          # Lets storage.rules check family membership in Firestore.
+          grant "service-${PROJECT_NUMBER}@gcp-sa-firebasestorage.iam.gserviceaccount.com" roles/firebaserules.firestoreServiceAgent
+          # Lets Cloud Build build the functions in newer projects.
+          grant "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" roles/cloudbuild.builds.builder
+
+      - name: Store the Anthropic key in Firebase (only when it changed)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          current="$(firebase functions:secrets:access ANTHROPIC_API_KEY --project "$PROJECT_ID" 2>/dev/null || true)"
+          if [ "$current" != "$ANTHROPIC_API_KEY" ]; then
+            printf '%s' "$ANTHROPIC_API_KEY" | firebase functions:secrets:set ANTHROPIC_API_KEY --data-file=- --project "$PROJECT_ID" --non-interactive --force
+            echo "Anthropic key stored."
+          else
+            echo "Anthropic key unchanged."
+          fi
+
+      - name: Deploy (website, functions, rules)
+        run: firebase deploy --project "$PROJECT_ID" --non-interactive --force
+
+      - name: Let the app read photos back for lithophanes
+        run: gcloud storage buckets update "gs://${PROJECT_ID}.firebasestorage.app" --cors-file=cors.json
+
+      - name: Done
+        run: echo "### Live at https://${PROJECT_ID}.web.app" >> "$GITHUB_STEP_SUMMARY"

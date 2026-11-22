@@ -27,7 +27,7 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
    - **Project settings → Your apps → Web (</>)** → register an app → copy the `firebaseConfig` values into `public/firebase-config.js`.
    - Put the project id in `.firebaserc`.
 
-2. **Install the tools and deploy**
+2. **Deploy.** Easiest: let GitHub do it. `.github/workflows/deploy.yml` deploys on every push once two repository secrets exist (Settings → Secrets and variables → Actions): `FIREBASE_SERVICE_ACCOUNT` (the JSON key of a Google Cloud service account with the Owner role) and `ANTHROPIC_API_KEY`. It also does step 3 for you. Or deploy by hand:
    ```bash
    npm install -g firebase-tools
    firebase login
