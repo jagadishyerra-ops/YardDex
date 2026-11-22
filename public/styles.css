@@ -156,3 +156,17 @@ nav.tabs .in{max-width:560px;margin:0 auto;display:grid;grid-template-columns:1f
 .filebtn{position:relative;overflow:hidden}
 .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;font-size:0}
 .signin{display:grid;gap:14px;background:var(--surface);border-radius:24px;padding:20px;box-shadow:var(--shadow);margin-top:12px}
+
+/* dex toolbar, tips, notes, forms */
+.toolbar{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px}
+.toolbar .field{padding:10px 12px}
+select.field{appearance:auto;min-width:0}
+textarea.field{resize:vertical;font-weight:600;line-height:1.4}
+.tip{display:flex;gap:10px;align-items:center;justify-content:space-between;background:color-mix(in srgb,var(--sun) 22%,var(--surface));border-radius:16px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+.tip .iconbtn{padding:4px 10px;flex:0 0 auto}
+.notes{background:var(--surface-2);border-radius:14px;padding:10px 12px}
+a.small{color:inherit;text-decoration:none;text-align:center}
+/* street map */
+.lmap{position:relative;z-index:0;isolation:isolate;width:100%;height:360px;background:var(--surface-2)}
+.mapempty{margin:0;height:100%;display:grid;place-items:center;color:var(--ink-2);font-weight:800;padding:20px;text-align:center}
+.leaflet-container{font-family:var(--f-body)}

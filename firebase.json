@@ -15,7 +15,8 @@
           }
         ]
       }
-    ]
+    ],
+    "cleanUrls": true
   },
   "functions": [
     {

@@ -16,8 +16,9 @@ if (useEmulators && ["localhost","127.0.0.1"].includes(location.hostname)){
   connectStorageEmulator(storage, "127.0.0.1", 9199);
   connectFunctionsEmulator(fns, "127.0.0.1", 5001);
 }
-const identifyFn = httpsCallable(fns, "identify", { timeout: 70000 });
+const identifyFn = httpsCallable(fns, "identify", { timeout: 95000 });
 const familyFn = httpsCallable(fns, "family", { timeout: 30000 });
+const adminFn = httpsCallable(fns, "admin", { timeout: 30000 });
 
 // ---------- state ----------
 const S = {
@@ -26,6 +27,7 @@ const S = {
   add: null, lastSpotter: null, lastPlace: null, unsub: [],
   // fid: the family you're in; fam: its document; userReady: we know which family (if any) you're in
   fid: null, fam: null, userReady: false, unsubUser: null, join: null, busy: false, sheetKind: null,
+  q: "", sort: "new", kind: "all", quota: null, isAdmin: false, lmap: null, edit: null,
 };
 function defaultFamily(){ return { explorers: ["Me"], places: ["Backyard", "Front yard", "Park", "Trail"] }; }
 const KINDS = {
@@ -80,6 +82,7 @@ function render(){
   if (!S.userReady){ v.innerHTML = S.loadError ? loadingOrError() : `<div class="thinking">${magSvg()}Opening the field guide…</div>`; return; }
   if (S.join){ v.innerHTML = viewJoin(); $("#subline").textContent = "You’re invited"; return; }
   if (!S.fid){ v.innerHTML = viewStart(); $("#subline").textContent = "Your family field guide"; return; }
+  if (S.lmap && S.tab!=="map"){ try{ S.lmap.remove(); }catch{} S.lmap=null; }
   const sp = species();
   $("#subline").textContent = S.finds.length ? `${S.fam?.name ? S.fam.name+" · " : ""}${sp.length} species · ${S.finds.length} finds` : (S.fam?.name || "Your family field guide");
   if (S.tab==="dex") v.innerHTML = viewDex(sp);
@@ -161,21 +164,42 @@ function viewDex(sp){
       <button class="small" type="button" id="btnHearEx">${speakerSvg()}Hear an example card</button></div>`;
   }
   const people = [...new Set(S.finds.map(f=>f.spotter).filter(Boolean))];
-  html += `<div class="chips" role="group" aria-label="Filter by explorer">${["all",...people].map(p=>`<button type="button" class="chip" data-filter="${esc(p)}" aria-pressed="${S.filter===p}">${p==="all"?"Everyone":esc(p)}</button>`).join("")}</div>`;
-  const list = sp.filter(s => S.filter==="all" || s.finds.some(f=>f.spotter===S.filter)).sort((a,b)=>b.num-a.num);
-  html += `<div class="grid">` + list.map(s => {
-    const latest = s.finds[s.finds.length-1];
-    const k = kindOf(latest.kind);
+  const labels = [...new Set(sp.map(s=>kindOf(s.finds[s.finds.length-1].kind).label))].sort();
+  if (S.kind!=="all" && !labels.includes(S.kind)) S.kind="all";
+  html += installTip();
+  html += `<div class="toolbar"><input class="field" id="dexSearch" type="search" placeholder="Search your finds" value="${esc(S.q)}" aria-label="Search your finds" autocomplete="off">
+    <select class="field" id="dexSort" aria-label="Sort">${[["new","Newest"],["num","Dex number"],["rare","Rarest"],["az","A to Z"]].map(([v,l])=>`<option value="${v}" ${S.sort===v?"selected":""}>${l}</option>`).join("")}</select></div>`;
+  if (people.length>1) html += `<div class="chips" role="group" aria-label="Filter by explorer">${["all",...people].map(p=>`<button type="button" class="chip" data-filter="${esc(p)}" aria-pressed="${S.filter===p}">${p==="all"?"Everyone":esc(p)}</button>`).join("")}</div>`;
+  if (labels.length>1) html += `<div class="chips" role="group" aria-label="Filter by type">${["all",...labels].map(l=>`<button type="button" class="chip" data-kindf="${esc(l)}" aria-pressed="${S.kind===l}">${l==="all"?"All types":esc(l)}</button>`).join("")}</div>`;
+  return html + `<div id="dexList">${dexList(sp)}</div>`;
+}
+function dexList(sp){
+  const q = S.q.trim().toLowerCase();
+  const latest = s => s.finds[s.finds.length-1];
+  let list = sp.filter(s => (S.filter==="all" || s.finds.some(f=>f.spotter===S.filter))
+    && (S.kind==="all" || kindOf(latest(s).kind).label===S.kind)
+    && (!q || s.finds.some(f=>[f.name,f.scientific,f.notes,f.place,f.spotter].some(x=>String(x||"").toLowerCase().includes(q)))));
+  const by = { new:(a,b)=>latest(b).createdAt.localeCompare(latest(a).createdAt), num:(a,b)=>a.num-b.num,
+    rare:(a,b)=>(Math.max(...b.finds.map(f=>f.rarity||1))-Math.max(...a.finds.map(f=>f.rarity||1)))||a.num-b.num,
+    az:(a,b)=>latest(a).name.localeCompare(latest(b).name) }[S.sort] || ((a,b)=>b.num-a.num);
+  list = list.sort(by);
+  if (!list.length) return `<p class="muted">${q?`Nothing matches “${esc(S.q)}”.`:"No finds match these filters yet."}</p>`;
+  return `<div class="grid">` + list.map(s => {
+    const f = latest(s), k = kindOf(f.kind);
     return `<button type="button" class="card" data-open="${esc(s.key)}">
-      <img class="ph" alt="${esc(latest.name)}" src="${esc(thumbOf(latest))}" loading="lazy">
+      <img class="ph" alt="${esc(f.name)}" src="${esc(thumbOf(f))}" loading="lazy">
       ${s.finds.length>1?`<span class="seen">×${s.finds.length}</span>`:""}
-      ${s.finds.some(f=>f.printPick)?`<span class="pick">Print pick</span>`:""}
+      ${s.finds.some(x=>x.printPick)?`<span class="pick">Print pick</span>`:""}
       <span class="meta"><span class="num">#${String(s.num).padStart(3,"0")}</span>
-      <span class="nm">${esc(latest.name)}</span>${stars(latest.rarity)}
+      <span class="nm">${esc(f.name)}</span>${stars(f.rarity)}
       <span class="kind" style="--k:var(${k.v})">${k.label}</span></span></button>`;
   }).join("") + `</div>`;
-  if (!list.length) html += `<p class="muted">No finds for ${esc(S.filter)} yet.</p>`;
-  return html;
+}
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+function installTip(){
+  let off = true; try{ off = localStorage.getItem("yd-tip-off")==="1"; }catch{}
+  if (off || !isIOS() || isStandalone()) return "";
+  return `<div class="tip"><span><b>Tip:</b> tap Share, then <b>Add to Home Screen</b> to open YardDex like an app.</span><button type="button" class="iconbtn" data-dismisstip aria-label="Hide tip">✕</button></div>`;
 }
 
 // ---------- badges ----------
@@ -223,14 +247,46 @@ function viewMap(){
   const max = Math.max(1,...Object.values(pc));
   const usedKinds = [...new Set(geo.map(f=>f.kind))];
   return `<h2 style="margin-top:4px">Where we found things</h2>
-  <div class="mapbox"><canvas id="map" width="1040" height="780" aria-label="Map of finds"></canvas>
+  <div class="mapbox"><div id="lmap" class="lmap" role="region" aria-label="Map of finds"></div>
   ${geo.length?`<div class="legend">${usedKinds.map(k=>`<span><i style="--k:var(${kindOf(k).v})"></i>${kindOf(k).label}</span>`).join("")}</div>`:""}</div>
   <p class="note">${geo.length?`${geo.length} of ${S.finds.length} finds have a GPS spot. Tap a dot to open its card.`:`No GPS spots yet. Allow location when YardDex asks while adding a find, and the spot is saved with it.`}</p>
   <h2>Places</h2>
   <div class="places">${Object.entries(pc).sort((a,b)=>b[1]-a[1]).map(([p,c])=>`<div class="place"><span>${esc(p)}</span><span>${c}</span><div class="bar"><i style="width:${Math.round(100*c/max)}%"></i></div></div>`).join("") || `<p class="muted">Nothing yet.</p>`}</div>`;
 }
-let mapPts = [];
+let mapPts = [], leafletP = null;
+function loadLeaflet(){
+  return leafletP ||= new Promise((res, rej) => {
+    if (window.L) return res(window.L);
+    const css = document.createElement("link"); css.rel="stylesheet"; css.href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(css);
+    const s = document.createElement("script"); s.src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    s.onload = () => res(window.L); s.onerror = () => { leafletP=null; rej(new Error("map library didn't load")); };
+    document.head.appendChild(s);
+  });
+}
 function drawMap(){
+  const el = $("#lmap"); if (!el) return;
+  const geo = S.finds.filter(f=>typeof f.lat==="number" && typeof f.lon==="number");
+  if (S.lmap){ try{ S.lmap.remove(); }catch{} S.lmap=null; }
+  if (!geo.length){ el.innerHTML = `<p class="mapempty">Finds with a GPS spot will appear here.</p>`; return; }
+  loadLeaflet().then(L => {
+    if (!document.body.contains(el)) return;
+    const cs = getComputedStyle(document.documentElement), col = v => cs.getPropertyValue(v).trim();
+    const m = L.map(el, { zoomControl:true });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(m);
+    const pts = geo.map(f => {
+      L.circleMarker([f.lat,f.lon], { radius:10, weight:3, color:col("--surface"), fillColor:col(kindOf(f.kind).v), fillOpacity:1 })
+        .addTo(m).bindTooltip(esc(f.name)).on("click", () => openSpecies(keyOf(f), f.id));
+      return [f.lat,f.lon];
+    });
+    m.fitBounds(pts, { padding:[30,30], maxZoom:17 });
+    S.lmap = m;
+  }).catch(() => {
+    // Offline or blocked: fall back to the simple dot map.
+    el.innerHTML = `<canvas id="map" width="1040" height="780" aria-label="Map of finds"></canvas>`;
+    drawDotMap();
+  });
+}
+function drawDotMap(){
   const c = $("#map"); if (!c) return;
   const ctx = c.getContext("2d"), W=c.width, H=c.height, cs=getComputedStyle(document.documentElement);
   const col = v => cs.getPropertyValue(v).trim();
@@ -394,6 +450,8 @@ function openSpecies(key, focusId){
   <div class="btnrow" style="margin-top:12px">
     <button class="small" type="button" data-say="${esc(f.id)}">${speakerSvg()}Read it to me</button>
     <button class="small ${f.printPick?"on":""}" type="button" data-pickprint="${esc(f.id)}">${starSvg()}${f.printPick?"Print pick":"Make print pick"}</button>
+    <button class="small" type="button" data-share="${esc(f.id)}">Share</button>
+    <button class="small" type="button" data-edit="${esc(f.id)}">Edit or add notes</button>
   </div>
   <div class="foot" style="margin-top:10px">${maps}</div>
   <div id="delZone" style="margin-top:14px"><button class="small danger" type="button" data-askdel="${esc(f.id)}" style="width:100%">Remove this sighting</button></div>`);
@@ -408,7 +466,8 @@ function cardBody(f){
     ${f.scientific?`<div class="sci">${esc(f.scientific)}</div>`:""}
     <div class="rar">${stars(f.rarity)}<b>${RARITY[Math.max(1,Math.min(5,f.rarity||1))]}</b><span class="muted" style="font-size:13px">${esc(f.rarityWhy||"")}</span></div>
     ${f.safety?`<div class="warn">Careful: ${esc(f.safety)}</div>`:""}
-    <div class="fact">${esc(f.fact||"")}</div>
+    ${f.fact?`<div class="fact">${esc(f.fact)}</div>`:""}
+    ${f.notes?`<div class="notes"><b>Our notes:</b> ${esc(f.notes)}</div>`:""}
     ${f.lookFor?`<div><b>Look for:</b> ${esc(f.lookFor)}</div>`:""}
     <div class="foot"><span>Spotted by ${esc(f.spotter||"someone")}</span><span>${esc(f.place||"")}</span><span>${fmtDate(f.createdAt)}</span>${f.confidence&&f.confidence!=="sure"?`<span>Claude’s ${esc(f.confidence)}</span>`:""}</div>
   </div>`;
@@ -430,10 +489,20 @@ function speak(text){
 
 // ---------- sheet helpers ----------
 function openSheet(html){ $("#sheetBody").innerHTML = html; $("#sheet").hidden=false; $("#sheet").scrollTop=0; document.body.style.overflow="hidden"; }
-function closeSheet(){ S.sheetKind=null; $("#sheet").hidden=true; document.body.style.overflow=""; S.add=null; S.openKey=null; S.lithImg=null; try{ speechSynthesis.cancel(); }catch{} render(); }
+function closeSheet(){ S.sheetKind=null; S.edit=null; $("#sheet").hidden=true; document.body.style.overflow=""; S.add=null; S.openKey=null; S.lithImg=null; try{ speechSynthesis.cancel(); }catch{} render(); }
 
 // ---------- add flow ----------
-function openAdd(){ S.add = { step:"pick" }; renderAdd(); }
+function openAdd(){ S.add = { step:"pick" }; renderAdd(); loadQuota(); }
+async function loadQuota(){
+  try{ const { data } = await familyFn({ action:"quota" }); S.quota = data; }catch{ return; }
+  const n = $("#quotaNote"); if (n) n.textContent = quotaText();
+}
+function quotaText(){
+  const Q = S.quota; if (!Q) return "";
+  if (Q.paused || Q.blocked) return "Photo naming is off right now. You can still save finds and name them yourself.";
+  if (Q.remaining<=0) return "No photo names left today. You can still save finds and name them yourself.";
+  return `${Q.remaining} of ${Q.limit} photo names left today.`;
+}
 function renderAdd(){
   const A = S.add; if (!A) return;
   if (A.step==="pick"){
@@ -442,6 +511,7 @@ function renderAdd(){
       <label class="big sun filebtn">${camSvg()} Take a photo<input type="file" id="inCam" accept="image/*" capture="environment"></label>
       <label class="big ghost filebtn">Choose from Photos<input type="file" id="inLib" accept="image/*"></label>
       <p class="note">Get close and fill the picture with the thing you found. One thing per photo works best.</p>
+      <p class="note" id="quotaNote">${quotaText()}</p>
     </div>`);
     return;
   }
@@ -458,6 +528,23 @@ function renderAdd(){
       <div class="label">Where?</div>
       <div class="row">${pl.map(p=>`<button type="button" class="chip" data-place="${esc(p)}" aria-pressed="${A.place===p}">${esc(p)}</button>`).join("")}</div>
       <button class="big" id="btnIdentify" type="button">${magSvg(28)} What is it?</button>
+      <p class="note" id="quotaNote" style="margin:0">${quotaText()}</p>
+      <button class="big ghost" id="btnManual" type="button">Name it myself</button>
+    </div>`);
+    return;
+  }
+  if (A.step==="manual"){
+    openSheet(`<div class="sheethead"><h1>Name it yourself</h1><button class="iconbtn" data-close type="button">Cancel</button></div>
+    <div class="stack">
+      <img class="preview" alt="Your photo" src="${A.previewUrl}">
+      <label class="label" for="manName">What is it?</label>
+      <input class="field" id="manName" maxlength="80" placeholder="e.g. Robin, Oak leaf, Mystery bug" autocomplete="off">
+      <label class="label" for="manKind">Type</label>
+      <select class="field" id="manKind">${kindOptions("other")}</select>
+      <label class="label" for="manNotes">Notes (optional)</label>
+      <textarea class="field" id="manNotes" maxlength="500" rows="3" placeholder="Where was it? What was it doing?"></textarea>
+      <button class="big" id="btnSave" type="button">Add to YardDex</button>
+      <button class="big ghost" id="btnBackDetails" type="button">Back</button>
     </div>`);
     return;
   }
@@ -520,8 +607,9 @@ async function identify(){
     const image = await blobToBase64(blob);
     // Give the location up to 3 seconds; only a rough area is sent to Claude.
     const here = await Promise.race([A.gpsP, new Promise(r=>setTimeout(()=>r(null),3000))]);
-    const { data: r } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}), ...(here?{lat:here.lat, lon:here.lon}:{}) });
+    const { data: { remaining, ...r } } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}), ...(here?{lat:here.lat, lon:here.lon}:{}) });
     if (S.add !== A) return;
+    if (S.quota && typeof remaining==="number") S.quota.remaining = remaining;
     const gps = await A.gpsP;
     const res = { ...r, spotter: A.spotter, place: A.place, createdAt: new Date().toISOString(), _local: A.previewUrl };
     if (gps){ res.lat = gps.lat; res.lon = gps.lon; }
@@ -530,13 +618,22 @@ async function identify(){
     clearInterval(iv);
     if (S.add !== A) return;
     const code = e?.code || "";
-    const msg = code.includes("resource-exhausted") ? "That’s a lot of finds today! Try again tomorrow." :
-      code.includes("permission-denied") ? "You’re not in this family anymore." :
-      "Claude couldn’t read that photo. Try again or use another photo.";
-    toast(msg); A.step="details"; renderAdd(); return;
+    const friendly = ["resource-exhausted","unavailable","failed-precondition","permission-denied"].some(c=>code.includes(c)) && String(e?.message||"").length>20;
+    toast(friendly ? e.message : "Claude couldn’t read that photo. Try again, or name it yourself.");
+    A.step="details"; renderAdd(); loadQuota(); return;
   }
   clearInterval(iv); renderAdd();
   try{ navigator.vibrate?.(60); }catch{}
+}
+function kindOptions(sel){ return Object.entries(KINDS).map(([k,v])=>`<option value="${k}" ${k===sel?"selected":""}>${v.label}</option>`).join(""); }
+async function buildManual(){
+  const A = S.add, name = $("#manName")?.value.trim();
+  if (!name){ toast("Type a name first."); $("#manName")?.focus(); return false; }
+  const gps = await A.gpsP;
+  A.result = { found:true, name:name.slice(0,80), scientific:"", kind:$("#manKind").value, confidence:"sure", fact:"", lookFor:"",
+    rarity:1, rarityWhy:"", safety:"", manual:true, notes:($("#manNotes")?.value||"").trim().slice(0,500),
+    spotter:A.spotter, place:A.place, createdAt:new Date().toISOString(), _local:A.previewUrl, ...(gps?{lat:gps.lat, lon:gps.lon}:{}) };
+  return true;
 }
 async function saveFind(){
   const A = S.add; if (!A?.result) return;
@@ -553,6 +650,54 @@ async function saveFind(){
     S.tab="dex"; closeSheet();
     toast(isNew ? `New species: ${docData.name}!` : `Another ${docData.name} sighting!`);
   }catch{ btn.disabled=false; btn.textContent="Add to YardDex"; toast("Couldn’t save. Check your connection and try again."); }
+}
+
+// ---------- edit a saved find ----------
+function openEdit(id){
+  const f = S.finds.find(x=>x.id===id); if (!f) return;
+  S.sheetKind = "edit";
+  S.edit ||= { id, spotter:f.spotter||"", place:f.place||"" };
+  const E = S.edit, ex=[...new Set([...S.family.explorers, f.spotter].filter(Boolean))], pl=[...new Set([...S.family.places, f.place].filter(Boolean))];
+  openSheet(`<div class="sheethead"><h1>Edit find</h1><button class="iconbtn" type="button" data-canceledit>Cancel</button></div>
+  <div class="stack">
+    <label class="label" for="edName">Name</label>
+    <input class="field" id="edName" maxlength="80" value="${esc(E.name ?? f.name)}">
+    <label class="label" for="edKind">Type</label>
+    <select class="field" id="edKind">${kindOptions(E.kind ?? f.kind)}</select>
+    <div class="label">Who spotted it?</div>
+    <div class="row">${ex.map(p=>`<button type="button" class="chip" data-edspot="${esc(p)}" aria-pressed="${E.spotter===p}">${esc(p)}</button>`).join("")}</div>
+    <div class="label">Where?</div>
+    <div class="row">${pl.map(p=>`<button type="button" class="chip" data-edplace="${esc(p)}" aria-pressed="${E.place===p}">${esc(p)}</button>`).join("")}</div>
+    <label class="label" for="edNotes">Notes</label>
+    <textarea class="field" id="edNotes" maxlength="500" rows="4" placeholder="What was it doing? How big was it?">${esc(E.notes ?? f.notes ?? "")}</textarea>
+    <button class="big" id="btnEditSave" type="button">Save changes</button>
+  </div>`);
+}
+function keepEditInputs(){ const E=S.edit; if (!E) return; E.name=$("#edName")?.value; E.kind=$("#edKind")?.value; E.notes=$("#edNotes")?.value; }
+async function saveEdit(){
+  keepEditInputs();
+  const E = S.edit, f = S.finds.find(x=>x.id===E?.id); if (!f) return;
+  const name = (E.name||"").trim().slice(0,80); if (!name){ toast("The name can’t be empty."); return; }
+  const patch = { name, kind: KINDS[E.kind] ? E.kind : "other", spotter:E.spotter, place:E.place, notes:(E.notes||"").trim().slice(0,500), editedAt:new Date().toISOString() };
+  if (name!==f.name){ patch.confidence="sure"; patch.fixedByFamily=true; }
+  const btn=$("#btnEditSave"); btn.disabled=true; btn.textContent="Saving…";
+  try{
+    await updateDoc(doc(db,"families",S.fid,"finds",f.id), patch);
+    Object.assign(f, patch); S.edit=null; openSpecies(keyOf(f), f.id); toast("Saved");
+  }catch{ btn.disabled=false; btn.textContent="Save changes"; toast("Couldn’t save. Check your connection."); }
+}
+async function shareFind(f){
+  const text = `${f.found===false?"A mystery find":f.name}! ${f.fact||""} (from our YardDex)`.replace(/\s+/g," ").trim();
+  try{
+    if (navigator.share){
+      let files;
+      try{ const b = await (await fetch(photoOf(f))).blob(); files=[new File([b], "yarddex.jpg", { type:b.type||"image/jpeg" })]; }catch{}
+      if (files && navigator.canShare?.({ files })) await navigator.share({ files, title:f.name, text });
+      else await navigator.share({ title:f.name, text });
+      return;
+    }
+    await navigator.clipboard.writeText(text); toast("Copied to share");
+  }catch(e){ if (e?.name!=="AbortError") toast("Couldn’t share that."); }
 }
 
 // ---------- family ----------
@@ -582,6 +727,7 @@ function openFamily(){
     <div class="label">Family name</div>
     <div class="row" style="flex-wrap:nowrap"><input class="field" id="famName" value="${esc(f.name||"")}" maxlength="40"><button class="small" type="button" id="btnRename">Save</button></div>
     <p class="note">Signed in as ${esc(S.user?.email||"")}</p>
+    ${S.isAdmin?`<a class="small" href="/admin">Open admin dashboard</a>`:""}
     <div id="leaveZone"><button class="small danger" type="button" id="btnAskLeave" style="width:100%">Leave this family</button></div>
     <button class="small" type="button" id="btnSignOut">Sign out</button>
   </div>`);
@@ -656,7 +802,17 @@ document.addEventListener("click", async e => {
   if (t.dataset.spotter){ S.add.spotter=t.dataset.spotter; renderAdd(); return; }
   if (t.dataset.place){ S.add.place=t.dataset.place; renderAdd(); return; }
   if (t.id==="btnIdentify") return identify();
-  if (t.id==="btnSave") return saveFind();
+  if (t.id==="btnSave"){ if (S.add?.step==="manual" && !(await buildManual())) return; return saveFind(); }
+  if (t.id==="btnManual"){ S.add.step="manual"; renderAdd(); $("#manName")?.focus(); return; }
+  if (t.id==="btnBackDetails"){ S.add.step="details"; renderAdd(); return; }
+  if (t.dataset.kindf){ S.kind=t.dataset.kindf; render(); return; }
+  if (t.matches("[data-dismisstip]")){ try{ localStorage.setItem("yd-tip-off","1"); }catch{} t.closest(".tip")?.remove(); return; }
+  if (t.dataset.share){ const f=S.finds.find(x=>x.id===t.dataset.share); if (f) shareFind(f); return; }
+  if (t.dataset.edit){ S.edit=null; return openEdit(t.dataset.edit); }
+  if (t.dataset.edspot!==undefined && S.edit){ keepEditInputs(); S.edit.spotter=t.dataset.edspot; return openEdit(S.edit.id); }
+  if (t.dataset.edplace!==undefined && S.edit){ keepEditInputs(); S.edit.place=t.dataset.edplace; return openEdit(S.edit.id); }
+  if (t.id==="btnEditSave") return saveEdit();
+  if (t.matches("[data-canceledit]")){ const f=S.finds.find(x=>x.id===S.edit?.id); S.edit=null; if (f) return openSpecies(keyOf(f), f.id); return closeSheet(); }
   if (t.id==="btnRetry"){ S.add={step:"pick"}; renderAdd(); return; }
   if (t.id==="btnSayNew") return speak(sayText(S.add.result));
   if (t.dataset.say){ const f=S.finds.find(x=>x.id===t.dataset.say); if (f) speak(sayText(f)); return; }
@@ -690,11 +846,18 @@ document.addEventListener("click", async e => {
   if (t.dataset.rmex){ if (S.family.explorers.length>1) S.family.explorers=S.family.explorers.filter(x=>x!==t.dataset.rmex); return saveFamily(); }
   if (t.dataset.rmpl){ if (S.family.places.length>1) S.family.places=S.family.places.filter(x=>x!==t.dataset.rmpl); return saveFamily(); }
 });
-document.addEventListener("change", e => { if (e.target.id==="inCam"||e.target.id==="inLib") onPhoto(e.target.files?.[0], e.target.id==="inCam"); });
+document.addEventListener("change", e => {
+  if (e.target.id==="inCam"||e.target.id==="inLib") onPhoto(e.target.files?.[0], e.target.id==="inCam");
+  if (e.target.id==="dexSort"){ S.sort=e.target.value; const l=$("#dexList"); if (l) l.innerHTML=dexList(species()); }
+});
+document.addEventListener("input", e => {
+  if (e.target.id==="dexSearch"){ S.q=e.target.value; const l=$("#dexList"); if (l) l.innerHTML=dexList(species()); }
+});
 document.addEventListener("keydown", e => {
   if (e.key==="Enter" && (e.target.id==="newEx"||e.target.id==="newPl")) $(e.target.id==="newEx"?"#addEx":"#addPl").click();
   if (e.key==="Enter" && e.target.id==="newFamName") $("#btnCreateFam")?.click();
   if (e.key==="Enter" && e.target.id==="famName") $("#btnRename")?.click();
+  if (e.key==="Enter" && e.target.id==="manName") $("#btnSave")?.click();
   if (e.key==="Escape" && !$("#sheet").hidden) closeSheet();
 });
 document.addEventListener("click", e => {
@@ -756,6 +919,7 @@ function stopData(){ stopFamily(); if (S.unsubUser){ try{S.unsubUser();}catch{} 
 // Watch users/{uid} to learn which family you're in, then watch that family and its finds.
 function startData(){
   stopData(); S.loadError=""; render();
+  adminFn({ action:"whoami" }).then(({ data }) => { S.isAdmin = !!data?.admin; }).catch(()=>{});
   const timer = setTimeout(()=>{ if (!S.userReady){ S.loadError="The field guide is taking a while to open. Check your connection."; render(); } }, 10000);
   S.unsubUser = onSnapshot(doc(db,"users",S.user.uid), snap => {
     clearTimeout(timer); S.userReady=true; S.loadError="";

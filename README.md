@@ -47,12 +47,24 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
 
 6. **Invite people:** tap **Family** (top right) → **Share link**. Whoever opens the link and signs in with Google joins your family. The family's creator can remove people or make a new link (the old one stops working).
 
+## Admin dashboard
+
+Open **https://YOUR_PROJECT.web.app/admin** to manage budgets and watch usage. Only Google accounts listed in the `ADMIN_EMAILS` GitHub secret (Settings → Secrets and variables → Actions; separate several with commas) can open it, and every change is checked again on the server. It shows:
+
+- photos and Claude cost today, this month and last month, and a 30-day chart
+- **budget and limits**, which apply within 30 seconds with no redeploy: Claude model and effort, a monthly dollar cap, photos per family per day, photos per day for everyone, sign-ups on or off, and a pause switch for photo naming
+- every family with its members, finds and usage, where you can give a family its own daily limit, block it, or delete it
+- the last 60 photo-naming attempts, with result, tokens and cost
+
+Admins also see an **Open admin dashboard** button in the app's Family sheet.
+
 ## Families and your Claude bill
 
-Anyone with a Google account can sign up and make a family, and every photo they identify is billed to **your** Anthropic account. Two limits protect you; change them in `functions/.env` and redeploy functions:
+Anyone with a Google account can sign up and make a family, and every photo they identify is billed to **your** Anthropic account. Several limits protect you. Change them in the admin dashboard; the values in `functions/.env` are only the starting defaults:
 
 - `DAILY_LIMIT`: photos one family can identify per day (default 60).
 - `GLOBAL_DAILY_LIMIT`: photos the whole app can identify per day, all families together (default 300; with Haiku that's well under $1/day at most).
+- **Monthly budget**: photo naming stops for the month once Claude costs reach it (default $10).
 
 Also set a monthly spend limit on your Anthropic account (console.anthropic.com → Billing → Limits).
 

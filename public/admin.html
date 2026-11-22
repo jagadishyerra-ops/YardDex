@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>YardDex Admin</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#1F5A3D">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&family=DM+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* Chart bar color: validated for contrast against the light and dark surfaces. */
+  :root{ --chart:#4E9A4A; --ok:#2E7D32; --warn:#B26A00; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --chart:#55A852; --ok:#7CC777; --warn:#F5C04A; } }
+  :root[data-theme="dark"]{ --chart:#55A852; --ok:#7CC777; --warn:#F5C04A; }
+  .wrap.admin{max-width:980px;padding-bottom:60px}
+  .adm-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between;padding-block:6px 14px}
+  .adm-head .acts{display:flex;flex-wrap:wrap;gap:8px}
+  .adm-head a,.adm-head button{text-decoration:none;color:inherit}
+  .kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+  @media (min-width:720px){ .kpis{grid-template-columns:repeat(3,minmax(0,1fr))} }
+  .kpi{background:var(--surface);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow);display:grid;gap:2px;min-width:0}
+  .kpi small{font-size:12px;color:var(--ink-2);font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+  .kpi b{font-family:var(--f-display);font-size:28px;line-height:1.1;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:13px;color:var(--ink-2);font-weight:700}
+  .kpi .bar{width:100%;margin-top:6px}
+  .kpi .bar i{background:var(--chart)}
+  .kpi .bar i.hot{background:var(--berry)}
+  .panel{background:var(--surface);border-radius:20px;box-shadow:var(--shadow);padding:16px;margin-bottom:14px;min-width:0}
+  .panel h2{margin:0 0 4px}
+  .panel > p.note{margin:0 0 12px}
+  .banner{border-radius:14px;padding:10px 14px;font-weight:800;margin-bottom:10px;display:flex;gap:8px;align-items:center}
+  .banner.warn{background:color-mix(in srgb,var(--sun) 25%,var(--surface));color:var(--ink)}
+  .banner.bad{background:color-mix(in srgb,var(--berry) 18%,var(--surface));color:var(--ink)}
+  /* 30-day chart */
+  .chart{position:relative}
+  .bars{display:grid;grid-template-columns:repeat(30,minmax(0,1fr));gap:2px;align-items:end;height:160px;border-bottom:1px solid var(--line);padding-top:8px}
+  .bars button{all:unset;cursor:default;height:100%;display:flex;align-items:flex-end;position:relative}
+  .bars button i{display:block;width:100%;background:var(--chart);border-radius:4px 4px 0 0;min-height:0}
+  .bars button:hover i,.bars button:focus-visible i{filter:brightness(1.15)}
+  .bars button.zero i{background:var(--line);height:2px!important;border-radius:2px}
+  .axis{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-2);font-weight:700;margin-top:4px}
+  .ymax{position:absolute;top:0;left:0;font-size:12px;color:var(--ink-2);font-weight:700;background:var(--surface);padding-right:4px}
+  .tt{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:10px;padding:6px 10px;font-size:13px;font-weight:700;white-space:nowrap;transform:translate(-50%,-100%);z-index:2}
+  details summary{cursor:pointer;font-weight:800;color:var(--ink-2);font-size:14px;margin-top:10px}
+  /* tables */
+  .tbl{width:100%;border-collapse:collapse;font-size:14px}
+  .tbl th{text-align:left;font-size:12px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:2px solid var(--line)}
+  .tbl td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .tbl td:first-child{white-space:nowrap}
+  .tbl td.n,.tbl th.n{text-align:right;font-variant-numeric:tabular-nums}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* settings form */
+  .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px 16px}
+  .fld{display:grid;gap:4px;align-content:start}
+  .fld label{font-weight:800;font-size:14px}
+  .fld .note{margin:0}
+  .fld .field{padding:10px 12px}
+  .sw{display:flex;gap:10px;align-items:center;font-weight:800}
+  .sw input{width:22px;height:22px;accent-color:var(--pine)}
+  .formacts{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+  .formacts .big{width:auto;padding:12px 22px;font-size:18px}
+  /* families */
+  .fams{display:grid;gap:10px}
+  .fam{border:2px solid var(--line);border-radius:16px;padding:12px 14px;display:grid;gap:8px}
+  .fam.blocked{border-color:var(--berry)}
+  .fam h3{margin:0;font-family:var(--f-display);font-size:20px;line-height:1.2;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .pill{font-size:12px;font-weight:800;border-radius:999px;padding:2px 8px;background:var(--surface-2);color:var(--ink-2)}
+  .pill.bad{background:color-mix(in srgb,var(--berry) 20%,var(--surface));color:var(--ink)}
+  .famstats{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:14px;font-weight:700;color:var(--ink-2)}
+  .famstats b{color:var(--ink)}
+  .famacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .famacts .field{width:90px;padding:8px 10px}
+  .famacts label{font-size:13px;font-weight:800;color:var(--ink-2)}
+  .famacts .small{padding:8px 12px}
+  .members{font-size:13px;color:var(--ink-2)}
+  .err{color:var(--berry);font-weight:800}
+  .okc{color:var(--ok);font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap admin">
+  <header class="adm-head">
+    <div><div class="brand">Yard<span>Dex</span> <span style="font-size:20px;color:var(--ink-2)">Admin</span></div>
+      <div class="sub" id="who">Budgets, usage and families</div></div>
+    <div class="acts" id="acts" hidden>
+      <button class="iconbtn" type="button" id="btnRefresh">Refresh</button>
+      <a class="iconbtn" href="/">Back to app</a>
+      <button class="iconbtn" type="button" id="btnSignOut">Sign out</button>
+    </div>
+  </header>
+  <main id="view"><div class="thinking">Opening the dashboard…</div></main>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="admin.js"></script>
+</body>
+</html>

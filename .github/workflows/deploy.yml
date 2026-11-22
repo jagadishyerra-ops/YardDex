@@ -30,6 +30,7 @@ jobs:
           missing=0
           [ -n "$SA" ]  || { echo "::error::Add the FIREBASE_SERVICE_ACCOUNT secret (Settings → Secrets and variables → Actions), then re-run this job."; missing=1; }
           [ -n "$KEY" ] || { echo "::error::Add the ANTHROPIC_API_KEY secret (Settings → Secrets and variables → Actions), then re-run this job."; missing=1; }
+          [ -n "${{ secrets.ADMIN_EMAILS }}" ] || echo "::warning::No ADMIN_EMAILS secret, so nobody can open /admin. Add one with your Google email to use the admin dashboard."
           exit $missing
 
       - uses: actions/checkout@v6
@@ -88,6 +89,15 @@ jobs:
             echo "Anthropic key stored."
           else
             echo "Anthropic key unchanged."
+          fi
+
+      - name: Add the admin list (kept in a GitHub secret, not in the code)
+        env:
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+        run: |
+          if [ -n "$ADMIN_EMAILS" ]; then
+            printf '\nADMIN_EMAILS=%s\n' "$(printf '%s' "$ADMIN_EMAILS" | tr -d '\n\r ')" >> functions/.env
+            echo "Admin list added."
           fi
 
       - name: Deploy (website, functions, rules)
