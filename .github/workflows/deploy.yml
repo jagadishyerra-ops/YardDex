@@ -111,6 +111,16 @@ jobs:
           echo "::error::Deploy failed 3 times. Open the Cloud Build link in the log above to see why."
           exit 1
 
+      - name: Make sure the app can reach the functions (safe to repeat)
+        # If a function's first creation fails half-way, Google can leave it without public access, and every
+        # call is rejected before reaching our code. The functions still check Firebase sign-in themselves.
+        run: |
+          for f in identify family admin; do
+            gcloud run services add-iam-policy-binding "$f" --region us-east1 --project "$PROJECT_ID" \
+              --member=allUsers --role=roles/run.invoker --quiet >/dev/null && echo "ok: $f reachable" \
+              || echo "::warning::Couldn't open $f to the app"
+          done
+
       - name: Let the app read photos back for lithophanes
         run: gcloud storage buckets update "gs://${PROJECT_ID}.firebasestorage.app" --cors-file=cors.json
 

@@ -43,7 +43,9 @@ async function getSettings(fresh) {
   return val;
 }
 
-const OPTS = { region: "us-east1", maxInstances: 3 };
+// invoker "public" lets the app reach these functions at all (Google's front door). Every function still checks
+// the caller's Firebase sign-in itself and refuses anyone who isn't signed in and allowed.
+const OPTS = { region: "us-east1", maxInstances: 3, invoker: "public" };
 const DEFAULT_PLACES = ["Backyard", "Front yard", "Park", "Trail"];
 // Invite codes: 10 characters without look-alikes (0/O, 1/I/L).
 const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";

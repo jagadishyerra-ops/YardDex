@@ -51,3 +51,9 @@ jobs:
             --format='value(timestamp, resource.labels.service_name, severity, textPayload, jsonPayload.message)' \
             | cut -c1-600 \
             | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g'
+
+      - name: Can the app reach each function?
+        run: |
+          for f in identify family admin; do
+            if gcloud run services get-iam-policy "$f" --region us-east1 --project "$PROJECT_ID" --format=json | grep -q '"allUsers"'; then echo "$f: reachable"; else echo "$f: NOT reachable (missing public invoker)"; fi
+          done
