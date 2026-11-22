@@ -10,8 +10,8 @@ const { buildPrompt, parseCard } = require("./prompt");
 initializeApp();
 const db = () => getFirestore();
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
-// Any current vision-capable Claude model works. If this one is retired, the function falls back to the newest Sonnet.
-const CLAUDE_MODEL = defineString("CLAUDE_MODEL", { default: "claude-sonnet-4-5" });
+// Any current vision-capable Claude model works. If this one is retired, the function falls back to the newest Haiku.
+const CLAUDE_MODEL = defineString("CLAUDE_MODEL", { default: "claude-haiku-5-5" });
 // Photos one family can identify per day.
 const DAILY_LIMIT = defineInt("DAILY_LIMIT", { default: 60 });
 // Photos the whole app can identify per day, across every family. Protects your Claude API bill.
@@ -187,7 +187,10 @@ async function countUsage(fid) {
 async function ask(client, model, image, prompt) {
   return client.messages.create({
     model,
-    max_tokens: 700,
+    // Current models think before answering, and thinking counts toward max_tokens: leave room for it.
+    // Low effort keeps thinking (and cost) small for a quick identification.
+    max_tokens: 2000,
+    output_config: { effort: "low" },
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
       { type: "text", text: prompt },
@@ -219,9 +222,11 @@ exports.identify = onCall(
     } catch (e) {
       if (e?.status !== 404) throw new HttpsError("unavailable", "Claude is busy, try again");
       const list = await client.models.list({ limit: 50 });
-      const fallback = list.data.find(m => /sonnet/i.test(m.id)) || list.data[0];
+      const fallback = list.data.find(m => /haiku/i.test(m.id)) || list.data[0];
       msg = await ask(client, fallback.id, image, prompt);
     }
+    // Claude's safety checks can occasionally decline a photo; that is a normal reply, not an error.
+    if (msg.stop_reason === "refusal") throw new HttpsError("failed-precondition", "Claude couldn't identify that one. Try another photo.");
     const text = msg.content.filter(b => b.type === "text").map(b => b.text).join("");
     try { return parseCard(text); }
     catch { throw new HttpsError("internal", "Couldn't read Claude's answer"); }

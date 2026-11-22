@@ -20,7 +20,7 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
 
 1. **Create the Firebase project**
    - Go to console.firebase.google.com → Add project → name it `yarddex` (or anything).
-   - Upgrade to the **Blaze** plan (pay-as-you-go; Cloud Functions require it. Family use stays within the free tier for Firebase itself. The Claude API is billed separately by Anthropic, roughly a cent or two per photo).
+   - Upgrade to the **Blaze** plan (pay-as-you-go; Cloud Functions require it. Family use stays within the free tier for Firebase itself. The Claude API is billed separately by Anthropic, a small fraction of a cent per photo with the default Haiku model).
    - **Build → Authentication** → Get started → enable **Google**.
    - **Build → Firestore Database** → Create database (production mode, region `us-east1`).
    - **Build → Storage** → Get started (same region).
@@ -52,7 +52,7 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
 Anyone with a Google account can sign up and make a family, and every photo they identify is billed to **your** Anthropic account. Two limits protect you; change them in `functions/.env` and redeploy functions:
 
 - `DAILY_LIMIT`: photos one family can identify per day (default 60).
-- `GLOBAL_DAILY_LIMIT`: photos the whole app can identify per day, all families together (default 300, about $3–6/day at most).
+- `GLOBAL_DAILY_LIMIT`: photos the whole app can identify per day, all families together (default 300; with Haiku that's well under $1/day at most).
 
 Also set a monthly spend limit on your Anthropic account (console.anthropic.com → Billing → Limits).
 
@@ -60,7 +60,7 @@ Also set a monthly spend limit on your Anthropic account (console.anthropic.com 
 
 | Setting | Where | Default |
 |---|---|---|
-| Claude model | `CLAUDE_MODEL` in `functions/.env` | `claude-sonnet-4-5`. If that model is retired, the function automatically uses the newest Sonnet. |
+| Claude model | `CLAUDE_MODEL` in `functions/.env` | `claude-haiku-5-5` (about 0.05¢ per photo). `claude-sonnet-5-5` is better at rare species, at roughly 20× the cost. If the model is retired, the function falls back to the newest Haiku. |
 | Photo limit per family | `DAILY_LIMIT` in `functions/.env` | 60 identifications per family per day |
 | Photo limit for everyone | `GLOBAL_DAILY_LIMIT` in `functions/.env` | 300 identifications per day across all families (protects your API bill) |
 | Region | `functions/index.js` and `public/firebase-config.js` | `us-east1` |
