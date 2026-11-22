@@ -10,3 +10,5 @@ export const firebaseConfig = {
 };
 // Must match the region in functions/index.js
 export const functionsRegion = "us-east1";
+// Leave false. Only for testing on your own computer with `firebase emulators:start`.
+export const useEmulators = false;

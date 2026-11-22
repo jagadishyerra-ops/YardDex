@@ -1,7 +1,7 @@
 {
   "name": "YardDex",
   "short_name": "YardDex",
-  "description": "Our family field guide: snap a find, learn what it is, collect it.",
+  "description": "Your family field guide: snap a find, learn what it is, collect it.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

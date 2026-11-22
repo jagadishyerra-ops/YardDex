@@ -15,3 +15,9 @@ test("unknown kind becomes other; missing name becomes Mystery", () => {
   assert.equal(c.kind, "other"); assert.equal(c.name, "Mystery"); assert.equal(c.found, false); assert.equal(c.rarity, 1);
 });
 test("throws on non-JSON", () => { assert.throws(() => parseCard("sorry")); });
+test("prompt uses the family's rough area when given, and works without it", () => {
+  const near = buildPrompt("Park", "May", "near latitude 51.5, longitude -0.1");
+  assert.match(near, /latitude 51\.5/); assert.match(near, /in that area/);
+  const none = buildPrompt("Park", "May", "");
+  assert.match(none, /location is unknown/); assert.doesNotMatch(none, /Gwinnett/);
+});

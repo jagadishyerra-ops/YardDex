@@ -1,21 +1,33 @@
-// YardDex — family nature field guide (Firebase edition)
+// YardDex — nature field guide for families: create a family, share the invite link, collect finds together
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, setDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { getStorage, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
-import { firebaseConfig, functionsRegion } from "./firebase-config.js";
+import { getAuth, connectAuthEmulator, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, connectFirestoreEmulator, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getStorage, connectStorageEmulator, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+import { getFunctions, connectFunctionsEmulator, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
+import { firebaseConfig, functionsRegion, useEmulators } from "./firebase-config.js";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb), db = getFirestore(fb), storage = getStorage(fb);
-const identifyFn = httpsCallable(getFunctions(fb, functionsRegion), "identify", { timeout: 70000 });
+const fns = getFunctions(fb, functionsRegion);
+// For testing on your computer with `firebase emulators:start` (set useEmulators in firebase-config.js).
+if (useEmulators && ["localhost","127.0.0.1"].includes(location.hostname)){
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings:true });
+  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectStorageEmulator(storage, "127.0.0.1", 9199);
+  connectFunctionsEmulator(fns, "127.0.0.1", 5001);
+}
+const identifyFn = httpsCallable(fns, "identify", { timeout: 70000 });
+const familyFn = httpsCallable(fns, "family", { timeout: 30000 });
 
 // ---------- state ----------
 const S = {
   tab: "dex", finds: [], loaded: false, loadError: "", filter: "all", user: null, authReady: false,
-  family: { explorers: ["Jay", "Dad", "Mom"], places: ["Backyard", "Front yard", "Park", "Trail"] },
+  family: defaultFamily(),
   add: null, lastSpotter: null, lastPlace: null, unsub: [],
+  // fid: the family you're in; fam: its document; userReady: we know which family (if any) you're in
+  fid: null, fam: null, userReady: false, unsubUser: null, join: null, busy: false, sheetKind: null,
 };
+function defaultFamily(){ return { explorers: ["Me"], places: ["Backyard", "Front yard", "Park", "Trail"] }; }
 const KINDS = {
   bird:{label:"Bird",v:"--k-bird"}, bug:{label:"Bug",v:"--k-bug"}, spider:{label:"Spider",v:"--k-bug"},
   plant:{label:"Plant",v:"--k-plant"}, tree:{label:"Tree",v:"--k-plant"}, flower:{label:"Flower",v:"--k-flower"},
@@ -59,13 +71,17 @@ function streaks(){
 // ---------- render ----------
 function render(){
   document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-current", b.dataset.tab===S.tab ? "page" : "false"));
-  $("#tabs").hidden = !S.user;
-  $("#btnExplorers").hidden = !S.user;
+  const inFamily = !!(S.user && S.fid && !S.join);
+  $("#tabs").hidden = !inFamily;
+  $("#btnExplorers").hidden = !inFamily;
   const v = $("#view");
   if (!S.authReady){ v.innerHTML = `<div class="thinking">${magSvg()}Opening the field guide…</div>`; return; }
-  if (!S.user){ v.innerHTML = viewSignIn(); $("#subline").textContent = "Our family field guide"; return; }
+  if (!S.user){ v.innerHTML = viewSignIn(); $("#subline").textContent = "Your family field guide"; return; }
+  if (!S.userReady){ v.innerHTML = S.loadError ? loadingOrError() : `<div class="thinking">${magSvg()}Opening the field guide…</div>`; return; }
+  if (S.join){ v.innerHTML = viewJoin(); $("#subline").textContent = "You’re invited"; return; }
+  if (!S.fid){ v.innerHTML = viewStart(); $("#subline").textContent = "Your family field guide"; return; }
   const sp = species();
-  $("#subline").textContent = S.finds.length ? `${sp.length} species · ${S.finds.length} finds` : "Our family field guide";
+  $("#subline").textContent = S.finds.length ? `${S.fam?.name ? S.fam.name+" · " : ""}${sp.length} species · ${S.finds.length} finds` : (S.fam?.name || "Your family field guide");
   if (S.tab==="dex") v.innerHTML = viewDex(sp);
   else if (S.tab==="map") { v.innerHTML = viewMap(); drawMap(); }
   else if (S.tab==="badges") v.innerHTML = viewBadges(sp);
@@ -76,10 +92,52 @@ function viewSignIn(){
     <div class="example" aria-hidden="true"><div class="art"></div><div><span class="tag">Example</span><div style="font-family:var(--f-display);font-weight:700;font-size:20px">Northern Cardinal</div>${stars(1)}</div></div>
     <h2 style="margin:0">Snap it. Name it. Collect it.</h2>
     <p class="muted" style="margin:0">Take a photo of anything you find outside. YardDex tells you what it is and adds it to your family’s collection.</p>
+    ${S.join?`<p class="fact" style="margin:0">You’ve been invited to join a family on YardDex. Sign in to join them.</p>`:""}
     <button class="big" type="button" id="btnSignIn">Sign in with Google</button>
     ${S.loadError?`<p class="warn" style="margin:0">${esc(S.loadError)}</p>`:""}
   </div>`;
 }
+function viewStart(){
+  return `<div class="signin">
+    <h2 style="margin:0">Start your family’s YardDex</h2>
+    <p class="muted" style="margin:0">Make a family, then send the invite link to everyone who should share the collection: partners, grandparents, older kids.</p>
+    <label class="label" for="newFamName">Family name</label>
+    <input class="field" id="newFamName" maxlength="40" placeholder="e.g. The Garcia Family" autocomplete="off">
+    <button class="big" type="button" id="btnCreateFam" ${S.busy?"disabled":""}>${S.busy?"Creating…":"Create family"}</button>
+    <p class="note" style="margin:0"><b>Joining someone else’s family?</b> Ask them for their invite link and open it on this phone.</p>
+    ${S.loadError?`<p class="warn" style="margin:0">${esc(S.loadError)}</p>`:""}
+    <button class="small" type="button" id="btnSignOut">Sign out (${esc(S.user?.email||"")})</button>
+  </div>`;
+}
+function viewJoin(){
+  const J = S.join;
+  if (J.state==="loading") return `<div class="thinking">${magSvg()}Opening your invite…</div>`;
+  if (J.state==="error") return `<div class="empty"><b>${esc(J.error)}</b><button class="small" type="button" id="btnJoinCancel">OK</button></div>`;
+  const cur = S.fid && S.fam;
+  const curAlone = cur && (S.fam.members||[]).length===1;
+  return `<div class="signin">
+    <h2 style="margin:0">Join ${esc(J.name)}?</h2>
+    <p class="muted" style="margin:0">${J.memberCount} ${J.memberCount===1?"person is":"people are"} already collecting finds together. Once you join, everything anyone snaps shows up on every phone in the family.</p>
+    ${cur?`<p class="warn" style="margin:0">You’ll leave ${esc(S.fam.name)}.${curAlone?" You’re its only member, so its finds will be deleted.":" Its finds stay with the people still in it."}</p>`:""}
+    <button class="big" type="button" id="btnJoin" ${S.busy?"disabled":""}>${S.busy?"Joining…":"Join family"}</button>
+    <button class="big ghost" type="button" id="btnJoinCancel">Not now</button>
+  </div>`;
+}
+async function loadJoin(){
+  const J = S.join; if (!J || J.state || !S.user || !S.userReady) return;
+  J.state = "loading"; render();
+  try{
+    const { data } = await familyFn({ action:"preview", code:J.code });
+    if (S.join !== J) return;
+    if (data.already){ clearJoin(); toast(`You’re already in ${data.name}.`); render(); return; }
+    Object.assign(J, { state:"ready", name:data.name, memberCount:data.memberCount });
+  }catch(e){
+    if (S.join !== J) return;
+    Object.assign(J, { state:"error", error: e?.message && !/internal/i.test(e.code||"") ? e.message : "That invite link didn’t work. Ask for a new one." });
+  }
+  render();
+}
+function clearJoin(){ S.join=null; try{ localStorage.removeItem("yd-join"); }catch{} }
 function loadingOrError(){
   if (S.loadError) return `<div class="empty"><b>${esc(S.loadError)}</b><button class="small" type="button" id="btnSignOut">Sign out</button></div>`;
   if (!S.loaded) return `<div class="thinking">${magSvg()}Opening the field guide…</div>`;
@@ -372,7 +430,7 @@ function speak(text){
 
 // ---------- sheet helpers ----------
 function openSheet(html){ $("#sheetBody").innerHTML = html; $("#sheet").hidden=false; $("#sheet").scrollTop=0; document.body.style.overflow="hidden"; }
-function closeSheet(){ $("#sheet").hidden=true; document.body.style.overflow=""; S.add=null; S.openKey=null; S.lithImg=null; try{ speechSynthesis.cancel(); }catch{} render(); }
+function closeSheet(){ S.sheetKind=null; $("#sheet").hidden=true; document.body.style.overflow=""; S.add=null; S.openKey=null; S.lithImg=null; try{ speechSynthesis.cancel(); }catch{} render(); }
 
 // ---------- add flow ----------
 function openAdd(){ S.add = { step:"pick" }; renderAdd(); }
@@ -443,7 +501,7 @@ async function onPhoto(file, fromCamera){
   A.uploads = (async () => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2,8);
     const big = await scaleBlob(A.img, 2400, .88), thumb = await toBlob(cropDraw(A.img, 480, 480), .82);
-    const pRef = sref(storage, `photos/${id}.jpg`), tRef = sref(storage, `photos/${id}_thumb.jpg`);
+    const pRef = sref(storage, `photos/${S.fid}/${id}.jpg`), tRef = sref(storage, `photos/${S.fid}/${id}_thumb.jpg`);
     await Promise.all([uploadBytes(pRef, big, { contentType:"image/jpeg" }), uploadBytes(tRef, thumb, { contentType:"image/jpeg" })]);
     const [photoUrl, thumbUrl] = await Promise.all([getDownloadURL(pRef), getDownloadURL(tRef)]);
     return { photoPath: pRef.fullPath, thumbPath: tRef.fullPath, photoUrl, thumbUrl };
@@ -459,7 +517,9 @@ async function identify(){
   try{
     const blob = await scaleBlob(A.img, 1280, .85);
     const image = await blobToBase64(blob);
-    const { data: r } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}) });
+    // Give the location up to 3 seconds; only a rough area is sent to Claude.
+    const here = await Promise.race([A.gpsP, new Promise(r=>setTimeout(()=>r(null),3000))]);
+    const { data: r } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}), ...(here?{lat:here.lat, lon:here.lon}:{}) });
     if (S.add !== A) return;
     const gps = await A.gpsP;
     const res = { ...r, spotter: A.spotter, place: A.place, createdAt: new Date().toISOString(), _local: A.previewUrl };
@@ -470,7 +530,7 @@ async function identify(){
     if (S.add !== A) return;
     const code = e?.code || "";
     const msg = code.includes("resource-exhausted") ? "That’s a lot of finds today! Try again tomorrow." :
-      code.includes("permission-denied") ? "This account isn’t on the family list yet." :
+      code.includes("permission-denied") ? "You’re not in this family anymore." :
       "Claude couldn’t read that photo. Try again or use another photo.";
     toast(msg); A.step="details"; renderAdd(); return;
   }
@@ -487,32 +547,69 @@ async function saveFind(){
     if (fix && fix!==docData.name){ docData.name = fix.slice(0,80); docData.confidence = "sure"; docData.fixedByFamily = true; }
     Object.assign(docData, ids, { addedBy: S.user.uid });
     const isNew = !S.finds.some(f=>keyOf(f)===keyOf(docData));
-    await addDoc(collection(db, "finds"), docData);
+    await addDoc(collection(db, "families", S.fid, "finds"), docData);
     S.lastSpotter = A.spotter; S.lastPlace = A.place;
     S.tab="dex"; closeSheet();
     toast(isNew ? `New species: ${docData.name}!` : `Another ${docData.name} sighting!`);
   }catch{ btn.disabled=false; btn.textContent="Add to YardDex"; toast("Couldn’t save. Check your connection and try again."); }
 }
 
-// ---------- explorers ----------
-function openExplorers(){
-  const ex=S.family.explorers, pl=S.family.places;
-  openSheet(`<div class="sheethead"><h1>Explorers & places</h1><button class="iconbtn" data-close type="button">Done</button></div>
+// ---------- family ----------
+const inviteUrl = () => S.fam?.inviteCode ? `${location.origin}${location.pathname}?join=${S.fam.inviteCode}` : "";
+function openFamily(){
+  S.sheetKind = "family";
+  const f=S.fam||{}, ex=S.family.explorers, pl=S.family.places, me=S.user.uid, owner=f.ownerUid===me;
+  const members=(f.members||[]).map(uid=>({ uid, ...(f.memberInfo?.[uid]||{ name:"Someone" }) }));
+  openSheet(`<div class="sheethead"><h1>${esc(f.name||"Family")}</h1><button class="iconbtn" data-close type="button">Done</button></div>
   <div class="stack">
+    <div class="label">Invite people</div>
+    <div class="help">
+      <span>Send this link to anyone you want in the family. They open it, sign in with Google, and they’re in.</span>
+      <code>${esc(inviteUrl())}</code>
+      <div class="btnrow"><button class="small" type="button" id="btnShareInvite">Share link</button><button class="small" type="button" id="btnCopyInvite">Copy link</button></div>
+      ${owner?`<button class="small" type="button" id="btnNewInvite">Make a new link (the old one stops working)</button>`:""}
+    </div>
+    <div class="label">Members</div>
+    <div class="lb">${members.map(m=>`<div class="lbrow"><span>${esc(m.name)}${m.uid===me?" (you)":""}${m.uid===f.ownerUid?" · creator":""}<br><small>${esc(m.email||"")}</small></span>${owner&&m.uid!==me?`<button class="small danger" type="button" data-rmmember="${esc(m.uid)}">Remove</button>`:"<span></span>"}</div>`).join("")}</div>
     <div class="label">Explorers</div>
+    <p class="note" style="margin:0">The names you pick from when you save a find, kids included. Tap a name to remove it; past finds keep their names.</p>
     <div class="row">${ex.map(p=>`<button type="button" class="chip" data-rmex="${esc(p)}" aria-label="Remove ${esc(p)}">${esc(p)} ✕</button>`).join("")}</div>
     <div class="row" style="flex-wrap:nowrap"><input class="field" id="newEx" placeholder="Add a name" maxlength="20"><button class="small" type="button" id="addEx">Add</button></div>
     <div class="label">Places</div>
     <div class="row">${pl.map(p=>`<button type="button" class="chip" data-rmpl="${esc(p)}" aria-label="Remove ${esc(p)}">${esc(p)} ✕</button>`).join("")}</div>
     <div class="row" style="flex-wrap:nowrap"><input class="field" id="newPl" placeholder="Add a place" maxlength="24"><button class="small" type="button" id="addPl">Add</button></div>
-    <p class="note">Tap a name to remove it. Past finds keep their names.</p>
+    <div class="label">Family name</div>
+    <div class="row" style="flex-wrap:nowrap"><input class="field" id="famName" value="${esc(f.name||"")}" maxlength="40"><button class="small" type="button" id="btnRename">Save</button></div>
     <p class="note">Signed in as ${esc(S.user?.email||"")}</p>
+    <div id="leaveZone"><button class="small danger" type="button" id="btnAskLeave" style="width:100%">Leave this family</button></div>
     <button class="small" type="button" id="btnSignOut">Sign out</button>
   </div>`);
 }
-async function saveFamily(){
-  openExplorers();
-  try{ await setDoc(doc(db, "settings", "family"), { explorers:S.family.explorers, places:S.family.places }); }catch{ toast("Couldn’t save that change."); }
+async function copyInvite(){ try{ await navigator.clipboard.writeText(inviteUrl()); toast("Invite link copied"); }catch{ toast("Press and hold the link to copy it."); } }
+async function saveFamily(patch){
+  openFamily();
+  try{ await updateDoc(doc(db, "families", S.fid), patch || { explorers:S.family.explorers, places:S.family.places }); }catch{ toast("Couldn’t save that change."); }
+}
+async function callFamily(data, okMsg){
+  if (S.busy) return null;
+  S.busy=true; render();
+  // Create, join and leave can delete the family you're in, so stop listening to it first,
+  // then switch using the function's reply (and re-attach to the old one if the call failed).
+  const switching = ["create","join","leave"].includes(data.action);
+  if (switching) stopFamily();
+  let r = null, nextFid = S.fid;
+  try{
+    ({ data:r } = await familyFn(data)); r = r || {};
+    if (switching) nextFid = r.familyId || null;
+    if (okMsg) toast(okMsg);
+  }catch(e){
+    toast(e?.message && e.code!=="functions/internal" ? e.message : "That didn’t work. Check your connection and try again.");
+  }finally{
+    S.busy=false;
+    if (switching) setFamily(nextFid, true);
+    render();
+  }
+  return r;
 }
 
 // ---------- events ----------
@@ -523,7 +620,34 @@ document.addEventListener("click", async e => {
   if (t.id==="btnSignIn") return doSignIn();
   if (t.id==="btnSignOut"){ closeSheet(); await signOut(auth); return; }
   if (t.id==="btnSnap") return openAdd();
-  if (t.id==="btnExplorers") return openExplorers();
+  if (t.id==="btnExplorers") return openFamily();
+  if (t.id==="btnCreateFam"){
+    const name=$("#newFamName")?.value.trim();
+    if (!name){ toast("Give your family a name first."); $("#newFamName")?.focus(); return; }
+    await callFamily({ action:"create", name }, `Welcome to ${name}!`); return;
+  }
+  if (t.id==="btnJoin"){ const r = await callFamily({ action:"join", code:S.join.code }, `You joined ${S.join.name}!`); if (r){ clearJoin(); S.tab="dex"; render(); } return; }
+  if (t.id==="btnJoinCancel"){ clearJoin(); render(); return; }
+  if (t.id==="btnShareInvite"){
+    const url=inviteUrl();
+    if (navigator.share){ try{ await navigator.share({ title:"Join our YardDex", text:`Join ${S.fam?.name||"our family"} on YardDex, our nature field guide.`, url }); }catch{} return; }
+    return copyInvite();
+  }
+  if (t.id==="btnCopyInvite") return copyInvite();
+  if (t.id==="btnNewInvite"){ const r = await callFamily({ action:"newInvite" }, "New invite link made"); if (r) openFamily(); return; }
+  if (t.dataset.rmmember){
+    const m=S.fam?.memberInfo?.[t.dataset.rmmember]; const nm=m?.name||"this person";
+    if (!confirm(`Remove ${nm} from the family? They’ll need a new invite link to come back.`)) return;
+    const r = await callFamily({ action:"remove", uid:t.dataset.rmmember }, `${nm} was removed`); if (r) openFamily(); return;
+  }
+  if (t.id==="btnRename"){ const v=$("#famName").value.trim().slice(0,40); if (!v) return; await saveFamily({ name:v }); toast("Saved"); return; }
+  if (t.id==="btnAskLeave"){
+    const alone=(S.fam?.members||[]).length<=1;
+    $("#leaveZone").innerHTML = `<div class="confirm"><b>${alone?"You’re the only member, so leaving deletes this family and all of its finds and photos.":"Leave this family? Your finds stay with them, and you’ll need a new invite link to come back."}</b><div class="btnrow"><button class="small" type="button" data-cancelleave>Stay</button><button class="small danger" type="button" id="btnLeave">Leave</button></div></div>`;
+    return;
+  }
+  if (t.matches("[data-cancelleave]")) return openFamily();
+  if (t.id==="btnLeave"){ const r = await callFamily({ action:"leave" }, "You left the family"); if (r) closeSheet(); return; }
   if (t.id==="btnHearEx") return speak("You found a Northern Cardinal! Only the boy cardinals are bright red. The girls are brown with orange beaks. It is everyday, 1 star.");
   if (t.dataset.filter){ S.filter=t.dataset.filter; render(); return; }
   if (t.dataset.open) return openSpecies(t.dataset.open);
@@ -537,7 +661,7 @@ document.addEventListener("click", async e => {
   if (t.dataset.say){ const f=S.finds.find(x=>x.id===t.dataset.say); if (f) speak(sayText(f)); return; }
   if (t.dataset.pickprint){
     const f=S.finds.find(x=>x.id===t.dataset.pickprint); if (!f) return;
-    try{ await updateDoc(doc(db,"finds",f.id), { printPick: !f.printPick }); f.printPick=!f.printPick; openSpecies(S.openKey, f.id); toast(f.printPick?"Added to print picks":"Removed from print picks"); }catch{ toast("Couldn’t change that."); }
+    try{ await updateDoc(doc(db,"families",S.fid,"finds",f.id), { printPick: !f.printPick }); f.printPick=!f.printPick; openSpecies(S.openKey, f.id); toast(f.printPick?"Added to print picks":"Removed from print picks"); }catch{ toast("Couldn’t change that."); }
     return;
   }
   if (t.dataset.askdel){
@@ -548,7 +672,7 @@ document.addEventListener("click", async e => {
   if (t.dataset.dodel){
     const f=S.finds.find(x=>x.id===t.dataset.dodel); if (!f) return;
     try{
-      await deleteDoc(doc(db,"finds",f.id));
+      await deleteDoc(doc(db,"families",S.fid,"finds",f.id));
       for (const p of [f.photoPath,f.thumbPath]) if (p) deleteObject(sref(storage,p)).catch(()=>{});
       closeSheet(); toast("Removed");
     }catch{ toast("Couldn’t remove it."); }
@@ -568,6 +692,8 @@ document.addEventListener("click", async e => {
 document.addEventListener("change", e => { if (e.target.id==="inCam"||e.target.id==="inLib") onPhoto(e.target.files?.[0], e.target.id==="inCam"); });
 document.addEventListener("keydown", e => {
   if (e.key==="Enter" && (e.target.id==="newEx"||e.target.id==="newPl")) $(e.target.id==="newEx"?"#addEx":"#addPl").click();
+  if (e.key==="Enter" && e.target.id==="newFamName") $("#btnCreateFam")?.click();
+  if (e.key==="Enter" && e.target.id==="famName") $("#btnRename")?.click();
   if (e.key==="Escape" && !$("#sheet").hidden) closeSheet();
 });
 document.addEventListener("click", e => {
@@ -624,30 +750,65 @@ async function doSignIn(){
     if (e?.code!=="auth/popup-closed-by-user"){ S.loadError="Sign-in didn’t work. Try again."; render(); }
   }
 }
-function stopData(){ S.unsub.forEach(u=>{ try{u();}catch{} }); S.unsub=[]; }
+function stopFamily(){ S.unsub.forEach(u=>{ try{u();}catch{} }); S.unsub=[]; S.fam=null; S.finds=[]; S.loaded=false; S.filter="all"; S.family=defaultFamily(); }
+function stopData(){ stopFamily(); if (S.unsubUser){ try{S.unsubUser();}catch{} S.unsubUser=null; } S.fid=null; S.userReady=false; }
+// Watch users/{uid} to learn which family you're in, then watch that family and its finds.
 function startData(){
-  stopData(); S.loaded=false; S.loadError=""; render();
-  const timer = setTimeout(()=>{ if (!S.loaded){ S.loadError="The field guide is taking a while to open. Check your connection."; render(); } }, 10000);
-  S.unsub.push(onSnapshot(doc(db,"settings","family"), snap => {
-    if (snap.exists()){ const d=snap.data(); if (Array.isArray(d.explorers)&&d.explorers.length) S.family.explorers=d.explorers.map(String); if (Array.isArray(d.places)&&d.places.length) S.family.places=d.places.map(String); }
+  stopData(); S.loadError=""; render();
+  const timer = setTimeout(()=>{ if (!S.userReady){ S.loadError="The field guide is taking a while to open. Check your connection."; render(); } }, 10000);
+  S.unsubUser = onSnapshot(doc(db,"users",S.user.uid), snap => {
+    clearTimeout(timer); S.userReady=true; S.loadError="";
+    const fid = snap.exists() ? (snap.get("familyId") || null) : null;
+    if (!fid && (S.fid || S.lostFid) && !S.busy) toast("You’re no longer in that family.");
+    if (fid !== S.fid && !S.busy) setFamily(fid);
+    S.lostFid = null;
+    render(); loadJoin();
+  }, () => { clearTimeout(timer); S.loadError="Couldn’t open the field guide right now. Try reloading."; render(); });
+}
+function setFamily(fid, force){
+  if (fid === S.fid && !force) return;
+  S.fid = fid; startFamily();
+  if (!$("#sheet").hidden) closeSheet();
+}
+function startFamily(){
+  stopFamily(); if (!S.fid) return;
+  const fid = S.fid;
+  S.unsub.push(onSnapshot(doc(db,"families",fid), snap => {
+    if (!snap.exists()) return;
+    const d = S.fam = snap.data();
+    if (Array.isArray(d.explorers)&&d.explorers.length) S.family.explorers=d.explorers.map(String);
+    if (Array.isArray(d.places)&&d.places.length) S.family.places=d.places.map(String);
     if ($("#sheet").hidden) render();
-  }, ()=>{}));
-  S.unsub.push(onSnapshot(query(collection(db,"finds"), orderBy("createdAt","asc")), snap => {
-    clearTimeout(timer); S.loaded=true; S.loadError="";
+    else if (S.sheetKind==="family" && !(document.activeElement?.matches("input")) && !$("#leaveZone .confirm")) openFamily();
+  }, lostAccess));
+  S.unsub.push(onSnapshot(query(collection(db,"families",fid,"finds"), orderBy("createdAt","asc")), snap => {
+    S.loaded=true; S.loadError="";
     S.finds = snap.docs.map(d=>({ id:d.id, ...d.data() })).filter(f=>typeof f.createdAt==="string");
     if ($("#sheet").hidden) render();
   }, err => {
-    clearTimeout(timer);
-    S.loadError = err?.code==="permission-denied"
-      ? `${S.user?.email||"This account"} isn’t on the family list yet. Ask Jag to add it in Firebase (config/family → members).`
-      : "Couldn’t open the field guide right now. Try reloading.";
-    render();
+    if (err?.code==="permission-denied") return lostAccess(err);
+    S.loadError="Couldn’t open the field guide right now. Try reloading."; render();
   }));
 }
+// Access to the family was revoked (you were removed, or it was deleted). Re-read which family you're in
+// from scratch; at most once every 10 seconds so a misconfigured project can't loop.
+function lostAccess(err){
+  if (err?.code!=="permission-denied" || S.busy || !S.user) return;
+  if (Date.now() - (lostAccess.at||0) < 10000) return;
+  lostAccess.at = Date.now();
+  const was = S.fid; startData(); S.lostFid = was;
+}
+// Invite links look like https://yoursite/?join=CODE. Remember the code through sign-in, then tidy the address bar.
+(function readInvite(){
+  let code = new URLSearchParams(location.search).get("join");
+  try{ if (code) localStorage.setItem("yd-join", code); else code = localStorage.getItem("yd-join"); }catch{}
+  if (code) S.join = { code: String(code).toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,20) };
+  if (location.search.includes("join=")) history.replaceState(null, "", location.pathname);
+})();
 getRedirectResult(auth).catch(()=>{});
 onAuthStateChanged(auth, user => {
   S.user = user; S.authReady = true;
-  if (user) startData(); else { stopData(); S.finds=[]; render(); }
+  if (user) startData(); else { stopData(); render(); }
 });
 render();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});

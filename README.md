@@ -1,6 +1,6 @@
 # YardDex
 
-Our family field guide. Snap a photo of something you find outside, and Claude identifies it and turns it into a collectible card. Cards include rarity stars, a fun fact, read-aloud, badges, streaks, a map of finds, and 3D-printable lithophanes of favorite photos.
+A nature field guide for families. Anyone can sign in, create a family, and share an invite link so everyone in that family collects finds together. Snap a photo of something you find outside, and Claude identifies it and turns it into a collectible card. Cards include rarity stars, a fun fact, read-aloud, badges, streaks, a map of finds, and 3D-printable lithophanes of favorite photos.
 
 Built as a static web app (Firebase Hosting) plus one Cloud Function that calls the Claude API. Works best on iPhone as a home-screen app from Safari.
 
@@ -8,9 +8,9 @@ Built as a static web app (Firebase Hosting) plus one Cloud Function that calls 
 public/            the app (no build step)
   index.html, styles.css, app.js
   firebase-config.js   ← paste your Firebase web config here
-functions/         Cloud Function `identify` (sends the photo to Claude)
-firestore.rules    only family members can read/write
-storage.rules      only family members can read/upload photos
+functions/         Cloud Functions: `identify` (sends the photo to Claude) and `family` (create, join, invite, leave)
+firestore.rules    each family's finds are visible only to its members
+storage.rules      each family's photos are visible only to its members
 cors.json          lets the app read photos back for lithophanes
 ```
 
@@ -27,12 +27,7 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
    - **Project settings → Your apps → Web (</>)** → register an app → copy the `firebaseConfig` values into `public/firebase-config.js`.
    - Put the project id in `.firebaserc`.
 
-2. **Add the family list.** In Firestore, create the collection `config` with document id `family` and one field:
-   - `members` (array): each family member's Google email, **all lowercase**.
-
-   Only these accounts can open the dex or use Claude.
-
-3. **Install the tools and deploy**
+2. **Install the tools and deploy**
    ```bash
    npm install -g firebase-tools
    firebase login
@@ -41,31 +36,45 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
    firebase deploy
    ```
 
-4. **Let the app read photos back for lithophanes** (one command; use your bucket name from the Storage page):
+3. **Let the app read photos back for lithophanes** (one command; use your bucket name from the Storage page):
    ```bash
    gcloud storage buckets update gs://YOUR_BUCKET --cors-file=cors.json
    ```
 
-5. **Allow sign-in from your site.** Authentication → Settings → Authorized domains. `YOUR_PROJECT.web.app` is already there; add any custom domain you use.
+4. **Allow sign-in from your site.** Authentication → Settings → Authorized domains. `YOUR_PROJECT.web.app` is already there; add any custom domain you use.
 
-6. **On the iPhone:** open `https://YOUR_PROJECT.web.app` in Safari → sign in with Google → Share → **Add to Home Screen**.
+5. **On the iPhone:** open `https://YOUR_PROJECT.web.app` in Safari → sign in with Google → **Create family** → Share → **Add to Home Screen**.
+
+6. **Invite people:** tap **Family** (top right) → **Share link**. Whoever opens the link and signs in with Google joins your family. The family's creator can remove people or make a new link (the old one stops working).
+
+## Families and your Claude bill
+
+Anyone with a Google account can sign up and make a family, and every photo they identify is billed to **your** Anthropic account. Two limits protect you; change them in `functions/.env` and redeploy functions:
+
+- `DAILY_LIMIT`: photos one family can identify per day (default 60).
+- `GLOBAL_DAILY_LIMIT`: photos the whole app can identify per day, all families together (default 300, about $3–6/day at most).
+
+Also set a monthly spend limit on your Anthropic account (console.anthropic.com → Billing → Limits).
 
 ## Settings
 
 | Setting | Where | Default |
 |---|---|---|
 | Claude model | `CLAUDE_MODEL` in `functions/.env` | `claude-sonnet-4-5`. If that model is retired, the function automatically uses the newest Sonnet. |
-| Daily photo limit | `DAILY_LIMIT` in `functions/.env` | 60 identifications per day (protects your API bill) |
+| Photo limit per family | `DAILY_LIMIT` in `functions/.env` | 60 identifications per family per day |
+| Photo limit for everyone | `GLOBAL_DAILY_LIMIT` in `functions/.env` | 300 identifications per day across all families (protects your API bill) |
 | Region | `functions/index.js` and `public/firebase-config.js` | `us-east1` |
 
 ## Updating
 
 Edit files, then `firebase deploy --only hosting` for app changes, or `firebase deploy --only functions` for the Claude function. Tests for the prompt and response parsing are in `cd functions && npm test`.
 
+To try changes on your computer without touching the real project: set `useEmulators = true` in `public/firebase-config.js`, run `firebase emulators:start --project demo-yarddex`, and open http://127.0.0.1:5000. Set it back to `false` before deploying.
+
 ## How it works
 
 1. The **Snap** button opens the iPhone camera. The photo is shrunk on the phone and uploaded to Firebase Storage. Location comes from the phone if you allow it.
-2. The app calls the `identify` function, which checks that you're on the family list and under the daily limit, then sends the photo to Claude.
-3. Claude replies with a card: name, kind, a fun fact, what to look for, rarity for Gwinnett County this month, and a safety note. The family can fix the name before saving.
-4. Cards are saved to Firestore and show up live on every family phone.
+2. The app calls the `identify` function, which checks that you're in a family and under the daily limits, then sends the photo to Claude with a rough location (about 10 km), never the exact spot.
+3. Claude replies with a card: name, kind, a fun fact, what to look for, rarity for your area this month, and a safety note. The family can fix the name before saving.
+4. Cards are saved under your family in Firestore and show up live on every phone in the family. Other families can't see them.
 5. **Print:** star a find as a Print pick, choose a size, and download a watertight STL lithophane. It's 0.8–3.0 mm thick with a 3 mm frame. Print it in white PLA at 100% infill, standing upright.

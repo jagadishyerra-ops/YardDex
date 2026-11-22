@@ -1,15 +1,15 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isFamily() {
+    // Photos live in photos/{familyId}/...; only that family's members can see or add them.
+    function isMember(fid) {
       return request.auth != null
         && request.auth.token.email_verified == true
-        && request.auth.token.email.lower() in
-           firestore.get(/databases/(default)/documents/config/family).data.members;
+        && request.auth.uid in firestore.get(/databases/(default)/documents/families/$(fid)).data.members;
     }
-    match /photos/{file} {
-      allow read, delete: if isFamily();
-      allow create: if isFamily()
+    match /photos/{fid}/{file} {
+      allow read, delete: if isMember(fid);
+      allow create: if isMember(fid)
         && request.resource.size < 12 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
