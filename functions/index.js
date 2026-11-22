@@ -6,6 +6,7 @@ const { getStorage } = require("firebase-admin/storage");
 const crypto = require("node:crypto");
 const Anthropic = require("@anthropic-ai/sdk");
 const { buildPrompt, parseCard } = require("./prompt");
+const { MAX_FAMILIES_PER_PERSON, idsOf, withFamily, withoutFamily } = require("./membership");
 const { MODEL_CHOICES, EFFORTS, PRICES, costUsd, cleanSettings, mergeSettings, dayKey, monthKey } = require("./settings");
 
 initializeApp();
@@ -84,12 +85,14 @@ async function deleteFamilyData(fid) {
   await getStorage().bucket().deleteFiles({ prefix: `photos/${fid}/` }).catch(() => {});
 }
 
-// One callable for everything about families: create, preview an invite, join, leave, new invite link, remove a member.
+// One callable for everything about families. A person can be in several families; actions that work on one
+// family take `fid` (default: the family they're looking at now).
 exports.family = onCall(OPTS, async req => {
   const auth = requireUser(req);
   const uid = auth.uid, me = whoAmI(auth);
   const { action } = req.data || {};
   const userRef = db().doc(`users/${uid}`);
+  const tooMany = ids => ids.length >= MAX_FAMILIES_PER_PERSON;
 
   if (action === "create") {
     const name = cleanText(req.data.name, 40);
@@ -98,23 +101,21 @@ exports.family = onCall(OPTS, async req => {
     if (!settings.signupsOpen) throw new HttpsError("failed-precondition", "New families can't be created right now. Ask someone for an invite link instead.");
     const fref = db().collection("families").doc();
     const code = newCode();
-    let emptied = null;
     await db().runTransaction(async tx => {
       const u = await tx.get(userRef);
-      const old = u.exists ? u.get("familyId") : null;
+      const ud = u.exists ? u.data() : {};
       const today = new Date().toISOString().slice(0, 10);
-      const made = u.exists && u.get("createdDay") === today ? (u.get("createdToday") || 0) : 0;
+      const made = ud.createdDay === today ? (ud.createdToday || 0) : 0;
       if (made >= settings.maxNewFamiliesPerDay) throw new HttpsError("resource-exhausted", "That's a lot of new families today. Try again tomorrow.");
-      if (old) emptied = await leaveIn(tx, old, uid);
+      if (tooMany(idsOf(ud))) throw new HttpsError("failed-precondition", `You're in ${MAX_FAMILIES_PER_PERSON} families already. Leave one first.`);
       tx.set(fref, {
         name, ownerUid: uid, members: [uid], memberInfo: { [uid]: me },
         explorers: [me.name.split(" ")[0] || "Me"], places: DEFAULT_PLACES,
         inviteCode: code, createdAt: new Date().toISOString(),
       });
       tx.set(db().doc(`invites/${code}`), { familyId: fref.id });
-      tx.set(userRef, { familyId: fref.id, createdDay: today, createdToday: made + 1 }, { merge: true });
+      tx.set(userRef, { ...withFamily(ud, fref.id), createdDay: today, createdToday: made + 1 }, { merge: true });
     });
-    if (emptied) await deleteFamilyData(emptied);
     return { familyId: fref.id };
   }
 
@@ -127,45 +128,48 @@ exports.family = onCall(OPTS, async req => {
     if (action === "preview") {
       const f = await fref.get();
       if (!f.exists) throw new HttpsError("not-found", "That family no longer exists.");
-      return { name: f.get("name"), memberCount: (f.get("members") || []).length, already: (f.get("members") || []).includes(uid) };
+      return { familyId: fid, name: f.get("name"), memberCount: (f.get("members") || []).length, already: (f.get("members") || []).includes(uid) };
     }
-    let emptied = null;
     const { maxMembers } = await getSettings();
     await db().runTransaction(async tx => {
       const [f, u] = await Promise.all([tx.get(fref), tx.get(userRef)]);
       if (!f.exists) throw new HttpsError("not-found", "That family no longer exists.");
-      const members = f.get("members") || [];
-      const old = u.exists ? u.get("familyId") : null;
-      if (!members.includes(uid) && members.length >= maxMembers) throw new HttpsError("failed-precondition", "That family is full.");
-      if (old && old !== fid) emptied = await leaveIn(tx, old, uid);
-      if (!members.includes(uid)) tx.update(fref, { members: [...members, uid], [`memberInfo.${uid}`]: me });
-      tx.set(userRef, { familyId: fid }, { merge: true });
+      const members = f.get("members") || [], ud = u.exists ? u.data() : {};
+      if (!members.includes(uid)) {
+        if (members.length >= maxMembers) throw new HttpsError("failed-precondition", "That family is full.");
+        if (tooMany(idsOf(ud))) throw new HttpsError("failed-precondition", `You're in ${MAX_FAMILIES_PER_PERSON} families already. Leave one first.`);
+        tx.update(fref, { members: [...members, uid], [`memberInfo.${uid}`]: me });
+      }
+      tx.set(userRef, withFamily(ud, fid), { merge: true });
     });
-    if (emptied) await deleteFamilyData(emptied);
     return { familyId: fid };
   }
 
-  // The rest act on the caller's current family.
+  // The rest act on one family the caller belongs to.
   const u = await userRef.get();
-  const fid = u.exists ? u.get("familyId") : null;
-  if (!fid) throw new HttpsError("failed-precondition", "You're not in a family");
+  const ud = u.exists ? u.data() : {};
+  const fid = String(req.data?.fid || ud.familyId || "");
+  if (!fid || !idsOf(ud).includes(fid)) throw new HttpsError("failed-precondition", "You're not in that family");
   const fref = db().doc(`families/${fid}`);
 
   if (action === "quota") {
     const [settings, f, used] = await Promise.all([getSettings(), fref.get(), db().doc(`usage/${dayKey()}_${fid}`).get()]);
     const limit = familyLimit(f.exists ? f.data() : {}, settings);
     const n = used.exists ? (used.get("identify") || 0) : 0;
-    return { used: n, limit, remaining: Math.max(0, limit - n), paused: settings.paused, blocked: !!(f.exists && f.get("blocked")) };
+    return { fid, used: n, limit, remaining: Math.max(0, limit - n), paused: settings.paused, blocked: !!(f.exists && f.get("blocked")) };
   }
 
   if (action === "leave") {
-    let emptied = null;
+    let emptied = null, next = null;
     await db().runTransaction(async tx => {
+      const uu = await tx.get(userRef);
       emptied = await leaveIn(tx, fid, uid);
-      tx.set(userRef, { familyId: null }, { merge: true });
+      const nu = withoutFamily(uu.exists ? uu.data() : {}, fid);
+      next = nu.familyId;
+      tx.set(userRef, nu, { merge: true });
     });
     if (emptied) await deleteFamilyData(emptied);
-    return { ok: true };
+    return { familyId: next };
   }
 
   if (action === "newInvite") {
@@ -193,7 +197,7 @@ exports.family = onCall(OPTS, async req => {
       const members = (f.get("members") || []).filter(m => m !== target);
       const memberInfo = { ...(f.get("memberInfo") || {}) }; delete memberInfo[target];
       tx.update(fref, { members, memberInfo });
-      if (t.exists && t.get("familyId") === fid) tx.set(tref, { familyId: null }, { merge: true });
+      if (t.exists) tx.set(tref, withoutFamily(t.data(), fid), { merge: true });
     });
     return { ok: true };
   }
@@ -264,7 +268,9 @@ exports.identify = onCall(
   async req => {
     const auth = requireUser(req);
     const u = await db().doc(`users/${auth.uid}`).get();
-    const fid = u.exists ? u.get("familyId") : null;
+    const ud = u.exists ? u.data() : {};
+    // Save to the family the person is looking at; the app sends it so switching mid-snap can't misfile a photo.
+    const fid = req.data?.fid && idsOf(ud).includes(req.data.fid) ? req.data.fid : ud.familyId;
     const f = fid ? await db().doc(`families/${fid}`).get() : null;
     if (!f || !f.exists || !(f.get("members") || []).includes(auth.uid)) throw new HttpsError("permission-denied", "Join a family first");
     const fam = f.data();
@@ -390,7 +396,8 @@ exports.admin = onCall({ ...OPTS, timeoutSeconds: 120 }, async req => {
     const f = await fref.get();
     if (!f.exists) return { ok: true };
     const b = db().batch();
-    for (const uid of f.get("members") || []) b.set(db().doc(`users/${uid}`), { familyId: null }, { merge: true });
+    const users = (f.get("members") || []).length ? await db().getAll(...(f.get("members") || []).map(m => db().doc(`users/${m}`))) : [];
+    for (const us of users) b.set(us.ref, withoutFamily(us.exists ? us.data() : {}, fid), { merge: true });
     if (f.get("inviteCode")) b.delete(db().doc(`invites/${f.get("inviteCode")}`));
     await b.commit();
     await deleteFamilyData(fid);

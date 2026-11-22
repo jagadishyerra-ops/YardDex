@@ -47,6 +47,8 @@ You need: a Google account, an Anthropic API key (console.anthropic.com), and No
 
 6. **Invite people:** tap **Family** (top right) → **Share link**. Whoever opens the link and signs in with Google joins your family. The family's creator can remove people or make a new link (the old one stops working).
 
+   **Several families:** a person can belong to up to 10 families (say, a grandparent in two of their children's families). Opening another family's invite link adds it; tap the family name under the YardDex logo to switch, or to start another family. New finds are saved to the family you're viewing.
+
 ## Admin dashboard
 
 Open **https://YOUR_PROJECT.web.app/admin** to manage budgets and watch usage. Only Google accounts listed in the `ADMIN_EMAILS` GitHub secret (Settings → Secrets and variables → Actions; separate several with commas) can open it, and every change is checked again on the server. It shows:

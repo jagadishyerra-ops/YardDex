@@ -1,7 +1,7 @@
 // YardDex — nature field guide for families: create a family, share the invite link, collect finds together
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, connectAuthEmulator, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, connectFirestoreEmulator, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, connectFirestoreEmulator, collection, doc, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getStorage, connectStorageEmulator, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 import { firebaseConfig, functionsRegion, useEmulators } from "./firebase-config.js";
@@ -28,6 +28,7 @@ const S = {
   // fid: the family you're in; fam: its document; userReady: we know which family (if any) you're in
   fid: null, fam: null, userReady: false, unsubUser: null, join: null, busy: false, sheetKind: null,
   q: "", sort: "new", kind: "all", quota: null, isAdmin: false, lmap: null, edit: null,
+  myIds: [], myFams: [],  // every family you belong to, for the switcher
 };
 function defaultFamily(){ return { explorers: ["Me"], places: ["Backyard", "Front yard", "Park", "Trail"] }; }
 const KINDS = {
@@ -76,6 +77,8 @@ function render(){
   const inFamily = !!(S.user && S.fid && !S.join);
   $("#tabs").hidden = !inFamily;
   $("#btnExplorers").hidden = !inFamily;
+  const sw = $("#btnSwitch"); sw.hidden = !inFamily;
+  if (inFamily) sw.innerHTML = `${esc(S.fam?.name || "Your family")}${S.myIds.length>1?` <span aria-hidden="true">▾</span>`:""}`;
   const v = $("#view");
   if (!S.authReady){ v.innerHTML = `<div class="thinking">${magSvg()}Opening the field guide…</div>`; return; }
   if (!S.user){ v.innerHTML = viewSignIn(); $("#subline").textContent = "Your family field guide"; return; }
@@ -84,7 +87,7 @@ function render(){
   if (!S.fid){ v.innerHTML = viewStart(); $("#subline").textContent = "Your family field guide"; return; }
   if (S.lmap && S.tab!=="map"){ try{ S.lmap.remove(); }catch{} S.lmap=null; }
   const sp = species();
-  $("#subline").textContent = S.finds.length ? `${S.fam?.name ? S.fam.name+" · " : ""}${sp.length} species · ${S.finds.length} finds` : (S.fam?.name || "Your family field guide");
+  $("#subline").textContent = S.finds.length ? `${sp.length} species · ${S.finds.length} finds` : "Your family field guide";
   if (S.tab==="dex") v.innerHTML = viewDex(sp);
   else if (S.tab==="map") { v.innerHTML = viewMap(); drawMap(); }
   else if (S.tab==="badges") v.innerHTML = viewBadges(sp);
@@ -116,12 +119,10 @@ function viewJoin(){
   const J = S.join;
   if (J.state==="loading") return `<div class="thinking">${magSvg()}Opening your invite…</div>`;
   if (J.state==="error") return `<div class="empty"><b>${esc(J.error)}</b><button class="small" type="button" id="btnJoinCancel">OK</button></div>`;
-  const cur = S.fid && S.fam;
-  const curAlone = cur && (S.fam.members||[]).length===1;
   return `<div class="signin">
     <h2 style="margin:0">Join ${esc(J.name)}?</h2>
     <p class="muted" style="margin:0">${J.memberCount} ${J.memberCount===1?"person is":"people are"} already collecting finds together. Once you join, everything anyone snaps shows up on every phone in the family.</p>
-    ${cur?`<p class="warn" style="margin:0">You’ll leave ${esc(S.fam.name)}.${curAlone?" You’re its only member, so its finds will be deleted.":" Its finds stay with the people still in it."}</p>`:""}
+    ${S.fid?`<p class="note" style="margin:0">You’ll stay in your other ${S.myIds.length>1?"families":"family"} too. Switch between them by tapping the family name at the top.</p>`:""}
     <button class="big" type="button" id="btnJoin" ${S.busy?"disabled":""}>${S.busy?"Joining…":"Join family"}</button>
     <button class="big ghost" type="button" id="btnJoinCancel">Not now</button>
   </div>`;
@@ -132,7 +133,7 @@ async function loadJoin(){
   try{
     const { data } = await familyFn({ action:"preview", code:J.code });
     if (S.join !== J) return;
-    if (data.already){ clearJoin(); toast(`You’re already in ${data.name}.`); render(); return; }
+    if (data.already){ clearJoin(); toast(`You’re already in ${data.name}.`); switchFamily(data.familyId); render(); return; }
     Object.assign(J, { state:"ready", name:data.name, memberCount:data.memberCount });
   }catch(e){
     if (S.join !== J) return;
@@ -494,7 +495,7 @@ function closeSheet(){ S.sheetKind=null; S.edit=null; $("#sheet").hidden=true; d
 // ---------- add flow ----------
 function openAdd(){ S.add = { step:"pick" }; renderAdd(); loadQuota(); }
 async function loadQuota(){
-  try{ const { data } = await familyFn({ action:"quota" }); S.quota = data; }catch{ return; }
+  try{ const { data } = await familyFn({ action:"quota", fid:S.fid }); if (data.fid===S.fid) S.quota = data; }catch{ return; }
   const n = $("#quotaNote"); if (n) n.textContent = quotaText();
 }
 function quotaText(){
@@ -607,7 +608,7 @@ async function identify(){
     const image = await blobToBase64(blob);
     // Give the location up to 3 seconds; only a rough area is sent to Claude.
     const here = await Promise.race([A.gpsP, new Promise(r=>setTimeout(()=>r(null),3000))]);
-    const { data: { remaining, ...r } } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}), ...(here?{lat:here.lat, lon:here.lon}:{}) });
+    const { data: { remaining, ...r } } = await identifyFn({ image, place: A.place, month: new Date().toLocaleDateString("en-US",{month:"long"}), fid: S.fid, ...(here?{lat:here.lat, lon:here.lon}:{}) });
     if (S.add !== A) return;
     if (S.quota && typeof remaining==="number") S.quota.remaining = remaining;
     const gps = await A.gpsP;
@@ -768,6 +769,8 @@ document.addEventListener("click", async e => {
   if (t.id==="btnSignOut"){ closeSheet(); await signOut(auth); return; }
   if (t.id==="btnSnap") return openAdd();
   if (t.id==="btnExplorers") return openFamily();
+  if (t.id==="btnSwitch") return openSwitch();
+  if (t.dataset.switchfam){ const id=t.dataset.switchfam; if (id!==S.fid){ closeSheet(); await switchFamily(id); toast(`Now viewing ${S.myFams.find(f=>f.id===id)?.name||"that family"}`); } else closeSheet(); return; }
   if (t.id==="btnCreateFam"){
     const name=$("#newFamName")?.value.trim();
     if (!name){ toast("Give your family a name first."); $("#newFamName")?.focus(); return; }
@@ -790,7 +793,7 @@ document.addEventListener("click", async e => {
   if (t.id==="btnRename"){ const v=$("#famName").value.trim().slice(0,40); if (!v) return; await saveFamily({ name:v }); toast("Saved"); return; }
   if (t.id==="btnAskLeave"){
     const alone=(S.fam?.members||[]).length<=1;
-    $("#leaveZone").innerHTML = `<div class="confirm"><b>${alone?"You’re the only member, so leaving deletes this family and all of its finds and photos.":"Leave this family? Your finds stay with them, and you’ll need a new invite link to come back."}</b><div class="btnrow"><button class="small" type="button" data-cancelleave>Stay</button><button class="small danger" type="button" id="btnLeave">Leave</button></div></div>`;
+    $("#leaveZone").innerHTML = `<div class="confirm"><b>${alone?"You’re the only member, so leaving deletes this family and all of its finds and photos.":`Leave this family? Your finds stay with them, and you’ll need a new invite link to come back.${S.myIds.length>1?" You’ll switch to your other family.":""}`}</b><div class="btnrow"><button class="small" type="button" data-cancelleave>Stay</button><button class="small danger" type="button" id="btnLeave">Leave</button></div></div>`;
     return;
   }
   if (t.matches("[data-cancelleave]")) return openFamily();
@@ -915,7 +918,7 @@ async function doSignIn(){
   }
 }
 function stopFamily(){ S.unsub.forEach(u=>{ try{u();}catch{} }); S.unsub=[]; S.fam=null; S.finds=[]; S.loaded=false; S.filter="all"; S.family=defaultFamily(); }
-function stopData(){ stopFamily(); if (S.unsubUser){ try{S.unsubUser();}catch{} S.unsubUser=null; } S.fid=null; S.userReady=false; }
+function stopData(){ S.myIds=[]; S.myFams=[]; stopFamily(); if (S.unsubUser){ try{S.unsubUser();}catch{} S.unsubUser=null; } S.fid=null; S.userReady=false; }
 // Watch users/{uid} to learn which family you're in, then watch that family and its finds.
 function startData(){
   stopData(); S.loadError=""; render();
@@ -923,12 +926,42 @@ function startData(){
   const timer = setTimeout(()=>{ if (!S.userReady){ S.loadError="The field guide is taking a while to open. Check your connection."; render(); } }, 10000);
   S.unsubUser = onSnapshot(doc(db,"users",S.user.uid), snap => {
     clearTimeout(timer); S.userReady=true; S.loadError="";
-    const fid = snap.exists() ? (snap.get("familyId") || null) : null;
-    if (!fid && (S.fid || S.lostFid) && !S.busy) toast("You’re no longer in that family.");
+    const d = snap.exists() ? snap.data() : {};
+    const ids = Array.isArray(d.familyIds) ? d.familyIds : (d.familyId ? [d.familyId] : []);
+    const fid = d.familyId && ids.includes(d.familyId) ? d.familyId : (ids[0] || null);
+    const prev = S.fid || S.lostFid;
+    if (prev && !ids.includes(prev) && !S.busy) toast(`You’re no longer in ${S.myFams.find(f=>f.id===prev)?.name || S.lostName || "that family"}.`);
+    if (ids.join() !== S.myIds.join()) loadMyFams(ids);
     if (fid !== S.fid && !S.busy) setFamily(fid);
     S.lostFid = null;
     render(); loadJoin();
   }, () => { clearTimeout(timer); S.loadError="Couldn’t open the field guide right now. Try reloading."; render(); });
+}
+// Names for the family switcher (each family doc is readable because you're a member).
+async function loadMyFams(ids){
+  S.myIds = ids;
+  const fams = await Promise.all(ids.map(id => getDoc(doc(db,"families",id)).then(s => s.exists() ? { id, name:s.get("name") } : null).catch(()=>null)));
+  if (S.myIds !== ids) return;
+  S.myFams = fams.filter(Boolean);
+  render(); if (S.sheetKind==="switch") openSwitch();
+}
+async function switchFamily(id){
+  if (!id || id===S.fid) return;
+  setFamily(id); render();
+  try{ await updateDoc(doc(db,"users",S.user.uid), { familyId:id }); }catch{}
+}
+function openSwitch(){
+  S.sheetKind = "switch";
+  const names = new Map(S.myFams.map(f=>[f.id,f.name]));
+  if (S.fam && S.fid) names.set(S.fid, S.fam.name);
+  openSheet(`<div class="sheethead"><h1>Your families</h1><button class="iconbtn" data-close type="button">Done</button></div>
+  <div class="stack">
+    <div class="lb">${S.myIds.map(id=>`<button type="button" class="lbrow famrow" data-switchfam="${esc(id)}" aria-current="${id===S.fid}"><span>${esc(names.get(id)||"…")}</span><span>${id===S.fid?"Viewing":"Switch"}</span></button>`).join("")}</div>
+    <p class="note" style="margin:0">New finds are saved to the family you’re viewing.</p>
+    <div class="label">Start another family</div>
+    <div class="row" style="flex-wrap:nowrap"><input class="field" id="newFamName" maxlength="40" placeholder="Family name" autocomplete="off"><button class="small" type="button" id="btnCreateFam">Create</button></div>
+    <p class="note" style="margin:0"><b>Joining someone else’s family?</b> Open their invite link on this phone. You’ll keep your other families.</p>
+  </div>`);
 }
 function setFamily(fid, force){
   if (fid === S.fid && !force) return;
@@ -961,7 +994,7 @@ function lostAccess(err){
   if (err?.code!=="permission-denied" || S.busy || !S.user) return;
   if (Date.now() - (lostAccess.at||0) < 10000) return;
   lostAccess.at = Date.now();
-  const was = S.fid; startData(); S.lostFid = was;
+  const was = S.fid, name = S.fam?.name; startData(); S.lostFid = was; S.lostName = name;
 }
 // Invite links look like https://yoursite/?join=CODE. Remember the code through sign-in, then tidy the address bar.
 (function readInvite(){

@@ -170,3 +170,10 @@ a.small{color:inherit;text-decoration:none;text-align:center}
 .lmap{position:relative;z-index:0;isolation:isolate;width:100%;height:360px;background:var(--surface-2)}
 .mapempty{margin:0;height:100%;display:grid;place-items:center;color:var(--ink-2);font-weight:800;padding:20px;text-align:center}
 .leaflet-container{font-family:var(--f-body)}
+
+/* family switcher */
+.famswitch{display:inline-flex;gap:4px;align-items:center;border:0;background:none;padding:2px 0;font-weight:800;font-size:15px;color:var(--pine);max-width:100%;text-align:left}
+.famswitch span{font-size:12px}
+.famrow{border:0;width:100%;text-align:left;font:inherit;color:inherit}
+.famrow span:last-child{color:var(--ink-2);font-size:13px}
+.famrow[aria-current="true"]{outline:2px solid var(--pine)}

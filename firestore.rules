@@ -8,8 +8,16 @@ service cloud.firestore {
       return signedIn() && request.auth.uid in get(/databases/$(database)/documents/families/$(fid)).data.members;
     }
 
-    // users/{uid}: which family you're in. Written only by the Cloud Function.
-    match /users/{uid} { allow read: if signedIn() && request.auth.uid == uid; allow write: if false; }
+    // users/{uid}: familyIds = every family you're in (written only by the Cloud Function);
+    // familyId = the one you're looking at. You may switch familyId, but only to a family already in your list.
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['familyId'])
+        && resource.data.familyIds is list
+        && request.resource.data.familyId in resource.data.familyIds;
+      allow create, delete: if false;
+    }
 
     match /families/{fid} {
       allow read: if signedIn() && request.auth.uid in resource.data.members;
