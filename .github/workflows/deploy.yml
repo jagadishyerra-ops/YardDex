@@ -62,7 +62,8 @@ jobs:
           gcloud services enable --project "$PROJECT_ID" \
             cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com \
             artifactregistry.googleapis.com secretmanager.googleapis.com compute.googleapis.com \
-            firebaserules.googleapis.com firebasestorage.googleapis.com eventarc.googleapis.com
+            firebaserules.googleapis.com firebasestorage.googleapis.com eventarc.googleapis.com \
+            cloudbilling.googleapis.com firebaseextensions.googleapis.com pubsub.googleapis.com
 
       - name: Grant the permissions Firebase needs (safe to repeat)
         run: |
