@@ -1,0 +1,53 @@
+# Read-only check of why photo naming fails. Run it from the Actions tab ("Run workflow").
+# This repository is public, so it prints only error text, times and models: no names, emails or ids.
+name: Diagnose photo naming
+
+on:
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: yarddex-6150d
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Install function dependencies
+        working-directory: functions
+        run: npm ci
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Recent photo-naming attempts (from the app's own log)
+        working-directory: functions
+        run: |
+          node -e '
+            const { initializeApp } = require("firebase-admin/app");
+            const { getFirestore } = require("firebase-admin/firestore");
+            initializeApp({ projectId: process.env.PROJECT_ID });
+            (async () => {
+              const db = getFirestore();
+              const s = await db.collection("idlog").orderBy("at", "desc").limit(25).get();
+              console.log(`${s.size} recent attempts:`);
+              for (const d of s.docs) { const r = d.data(); console.log([r.at, r.ok ? "OK" : "FAIL", r.model, r.error || "", `${r.inputTokens}/${r.outputTokens} tokens`, `${r.ms}ms`].join(" | ")); }
+              const cfg = await db.doc("config/settings").get();
+              const c = cfg.exists ? cfg.data() : {};
+              console.log("settings:", JSON.stringify({ model: c.model, effort: c.effort, paused: c.paused, monthlyBudgetUsd: c.monthlyBudgetUsd, familyDailyLimit: c.familyDailyLimit, globalDailyLimit: c.globalDailyLimit }));
+            })().catch(e => { console.error("read failed:", e.message); process.exit(1); });
+          ' | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g'
+
+      - name: Function errors in the last 24 hours (Cloud Logging)
+        run: |
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name=("identify" OR "family" OR "admin") AND severity>=WARNING' \
+            --project "$PROJECT_ID" --freshness=1d --limit=40 \
+            --format='value(timestamp, resource.labels.service_name, severity, textPayload, jsonPayload.message)' \
+            | cut -c1-600 \
+            | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g'
