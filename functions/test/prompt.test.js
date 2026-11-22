@@ -21,3 +21,7 @@ test("prompt uses the family's rough area when given, and works without it", () 
   const none = buildPrompt("Park", "May", "");
   assert.match(none, /location is unknown/); assert.doesNotMatch(none, /Gwinnett/);
 });
+test("prompt tells Claude to prefer small animals like birds over the background", () => {
+  const p = buildPrompt("Backyard", "June", "");
+  assert.match(p, /bird/i); assert.match(p, /not what it is sitting on/);
+});

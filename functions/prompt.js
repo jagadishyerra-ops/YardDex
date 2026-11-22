@@ -7,8 +7,11 @@ function buildPrompt(place, month, area) {
   const region = area ? "in that area" : "in a typical neighborhood";
   return `You are the friendly naturalist for YardDex, a family nature field guide. The explorers are young kids and their grown-ups. ${where} It is ${month}. This photo was taken at: ${place}.
 Identify the main living thing or nature object in the photo (animal, bug, plant, tree, flower, mushroom, or a treasure like a feather, pinecone, nest, track, shell or rock).
+Look over the whole photo carefully before answering. Kids usually photograph animals from far away, so the subject may be small, off-center, partly hidden by leaves or branches, blurry, or seen from behind.
+If there is any animal in the photo (a bird, bug, squirrel, lizard, etc.), it is the subject, even if it is small and a tree, bush, feeder or sky fills most of the picture. Name the animal, not what it is sitting on.
+For birds, use size, shape, beak, colors, markings and posture, plus what lives in this area this month. If you can't tell the species, give the best group name (e.g. 'Sparrow', 'Hawk', 'Woodpecker') rather than calling it a Mystery.
 Reply with ONLY a JSON object, no other text:
-{"found": true or false (false if there is no nature subject),
+{"found": true or false (false only if there is truly no animal, plant or nature object to see),
  "name": "common name, as specific as you can be confidently (e.g. 'Carolina Wren'); use a broader name like 'Orb-weaver Spider' if unsure; 'Mystery' if found is false",
  "scientific": "scientific name or empty string",
  "kind": one of ${KINDS.map(k => `"${k}"`).join(",")},

@@ -515,7 +515,8 @@ async function identify(){
   const msgs=["Claude is checking the field guide…","Counting legs and feathers…","Comparing colors and shapes…","Almost there…"]; let mi=0;
   const iv=setInterval(()=>{ const m=$("#thinkMsg"); if(m) m.textContent=msgs[++mi%msgs.length]; },2200);
   try{
-    const blob = await scaleBlob(A.img, 1280, .85);
+    // 1568px is the most detail Claude uses; more makes small birds easier to see.
+    const blob = await scaleBlob(A.img, 1568, .88);
     const image = await blobToBase64(blob);
     // Give the location up to 3 seconds; only a rough area is sent to Claude.
     const here = await Promise.race([A.gpsP, new Promise(r=>setTimeout(()=>r(null),3000))]);

@@ -188,9 +188,9 @@ async function ask(client, model, image, prompt) {
   return client.messages.create({
     model,
     // Current models think before answering, and thinking counts toward max_tokens: leave room for it.
-    // Low effort keeps thinking (and cost) small for a quick identification.
-    max_tokens: 2000,
-    output_config: { effort: "low" },
+    // High effort helps spot small birds and tell similar species apart; with Haiku it's still ~0.1¢ a photo.
+    max_tokens: 8000,
+    output_config: { effort: "high" },
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
       { type: "text", text: prompt },
